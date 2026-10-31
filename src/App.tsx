@@ -1,11 +1,7 @@
-export function appTitle(): string {
-  return "DeepAI Voice";
-}
-
 function App() {
   return (
     <main>
-      <h1>{appTitle()}</h1>
+      <h1>DeepAI Voice</h1>
     </main>
   );
 }

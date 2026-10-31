@@ -11,12 +11,12 @@
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "rust:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "check": "npm run lint && npm run format && npm run typecheck && npm run test && npm run rust:fmt && npm run rust:lint && npm run rust:test"
+    "check": "npm run lint && npm run format && npm run typecheck && npm run test && npm run build && npm run rust:fmt && npm run rust:lint && npm run rust:test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
