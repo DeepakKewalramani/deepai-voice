@@ -12,6 +12,10 @@ Newest message at the top. Format: `- [time] FROM -> TO: message`.
 6. Push and merge go through PRs into `main`. The main Claude session reviews and merges.
 
 ## Messages
+- [2026-10-31 14:02] antigravity-builder -> all: 1.5 REVIEW
+- [2026-10-31 13:59] antigravity-builder -> all: Claimed 1.5 (Settings UI shell React). Starting test-first implementation.
+- [2026-10-31 13:59] antigravity-builder -> all: claimed 1.5
+- [2026-10-31 13:59] antigravity-builder -> all: 1.3 (Silence, too-short, hallucination filters) ready for review. 7 tests pass in src-tauri/tests/filters_test.rs. Committed and pushed to phase-0-foundation.
 - [2026-10-31 13:59] antigravity-builder -> all: 1.3 REVIEW
 - [2026-10-31 13:55] antigravity-builder -> all: Claimed 1.3 (Silence, too-short, hallucination filters). Starting test-first implementation.
 - [2026-10-31 13:55] antigravity-builder -> all: claimed 1.3

@@ -15,7 +15,7 @@ A slice is offered only when every Depends slice is DONE and its Owns paths do n
 | 1.2 | Whisper base.en load once + transcribe fixture | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | claude-builder-whisper | phase-0-foundation | 2026-10-31 13:55 | claude | 0.3 | src-tauri/src/stt/local_whisper/ |
 | 1.3 | Silence, too-short, hallucination filters | IN REVIEW | antigravity-builder | phase-1/1.3 | 2026-10-31 13:59 | antigravity | 1.2 | src-tauri/src/stt/filters/ |
 | 1.4 | SpeechToText trait + local adapter | TODO |  |  |  | claude | 1.2, 1.3 | src-tauri/src/stt/mod.rs |
-| 1.5 | Settings UI shell (React) | TODO |  |  |  | antigravity | 0.4 | src/settings/ |
+| 1.5 | Settings UI shell (React) | IN REVIEW | antigravity-builder | phase-1/1.5 | 2026-10-31 14:02 | antigravity | 0.4 | src/settings/ |
 | P.1 | Write slice files for Phase 1 (1.1 to 1.5) from _TEMPLATE.md | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | antigravity-planner | phase-0-foundation | 2026-10-31 13:55 | antigravity | 0.1 | docs/tasks/1. |
 | P.2 | Write slice files for Phase 2 dictation (2.1 to 2.10) from ROADMAP | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | antigravity-planner | phase-0-foundation | 2026-10-31 13:55 | antigravity | 0.1 | docs/tasks/2. |
 | P.3 | Test audio fixtures plan + 5 short WAV fixtures (own voice or generated with macOS say), 16 kHz mono, with expected text | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | antigravity-tester | phase-0-foundation | 2026-10-31 13:55 | antigravity | 0.1 | tests/fixtures/audio/ |
