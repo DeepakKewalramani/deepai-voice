@@ -30,3 +30,9 @@ Rule: nothing system-wide unless needed. No full Xcode (user decision D4, 31 Oct
 | 31 Oct 2026 | vite, @vitejs/plugin-react | 8.3.5, 6.1.2 | node_modules |
 | 31 Oct 2026 | typescript | 6.0.3 | node_modules |
 | 31 Oct 2026 | tauri (crate, feature tray-icon), tauri-build | 2.12.5, 2.7.4 | src-tauri/target, Cargo.lock |
+| 31 Oct 2026 | eslint, @eslint/js (slice 0.3) | 10.14.0, 10.0.1 | node_modules |
+| 31 Oct 2026 | typescript-eslint, eslint-plugin-react-hooks, globals (slice 0.3) | 8.72.1, 7.1.1, 17.13.0 | node_modules |
+| 31 Oct 2026 | prettier (slice 0.3) | 3.9.10 | node_modules |
+| 31 Oct 2026 | vitest (slice 0.3) | 5.0.5 | node_modules |
+
+Note: `npm audit` reports 11 moderate findings in dev dependencies (31 Oct 2026). Not triaged in 0.3.
