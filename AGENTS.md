@@ -29,4 +29,17 @@ Tauri v2 + Rust for native parts only (audio, Whisper, hotkey, paste, secure fie
 - Questions only the human can answer go to `HUMAN_INPUT.md` with a recommended default. Continue other safe work.
 
 ## 5. Commands
-Filled in slice 0.3. Until then: none.
+Run from the repo root. All must pass before a PR.
+| Command | What it does |
+|---|---|
+| `npm install` | Install JS dependencies |
+| `npm run tauri dev` | Run the app in dev mode |
+| `npm run tauri build -- --debug` | Debug build, bundle at `src-tauri/target/debug/bundle/macos/DeepAI Voice.app` |
+| `npm run lint` | ESLint on TS/TSX |
+| `npm run format` | Prettier check (`npm run format:write` to fix) |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run test` | Vitest unit tests |
+| `npm run rust:fmt` | `cargo fmt --check` |
+| `npm run rust:lint` | `cargo clippy --all-targets -- -D warnings` |
+| `npm run rust:test` | `cargo test` |
+| `npm run check` | All of the above checks in order, stops at the first failure |

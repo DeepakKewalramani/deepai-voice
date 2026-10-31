@@ -31,3 +31,13 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::QUIT_ID;
+
+    #[test]
+    fn quit_id_is_stable() {
+        assert_eq!(QUIT_ID, "quit");
+    }
+}
