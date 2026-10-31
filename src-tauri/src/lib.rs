@@ -39,10 +39,26 @@ pub fn tray_action(id: &str) -> TrayAction {
     }
 }
 
+/// Shows and focuses the hidden main window.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
     tauri::Builder::default()
+        // Closing the window hides it; the app keeps running in the menu bar.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .plugin(hotkey::fallback::plugin(hotkey_tx.clone()))
         .setup(move |app| {
             hotkey::start(app.handle(), hotkey_tx, hotkey_rx);
@@ -67,21 +83,28 @@ pub fn run() {
                 .tooltip("DeepAI Voice")
                 .menu(&menu)
                 .on_menu_event(|app, event| match tray_action(event.id().as_ref()) {
-                    TrayAction::ShowSettings => {
-                        let window = app
-                            .get_webview_window(MAIN_WINDOW)
-                            .expect("main window must exist (tauri.conf.json)");
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    TrayAction::ShowSettings => show_main_window(app),
                     TrayAction::Quit => app.exit(0),
                     TrayAction::Ignore => {}
                 })
                 .build(app)?;
+            // Show the settings window on launch so the app is visibly running
+            // even when the menu bar hides the tray icon.
+            show_main_window(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            // Clicking the app again (Finder, Spotlight) brings the window back.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show_main_window(app),
+            // Keep running in the menu bar after the last window is closed.
+            tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
+                api.prevent_exit();
+            }
+            _ => {}
+        });
 }
 
 #[cfg(test)]
