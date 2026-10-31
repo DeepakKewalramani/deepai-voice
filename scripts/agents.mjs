@@ -3,6 +3,7 @@
 // Usage:
 //   node scripts/agents.mjs status
 //   node scripts/agents.mjs next <lane>
+//   node scripts/agents.mjs wait <lane> [max-minutes=50]
 //   node scripts/agents.mjs claim <slice> <agent> [branch]
 //   node scripts/agents.mjs heartbeat <slice> <agent>
 //   node scripts/agents.mjs review <slice> <agent> [pr-url]
@@ -171,6 +172,37 @@ try {
       console.log(
         `NEXT ${p.id}: ${p.c[1]}\nOwns: ${p.owns.join(", ")}\nRun: node scripts/agents.mjs claim ${p.id} <your-agent-name>`,
       );
+      break;
+    }
+    case "wait": {
+      // Blocks until a slice is ready for the lane or a new inbox message is addressed to it.
+      // Lets an IDE agent (e.g. Antigravity) stay in one long turn instead of stopping.
+      const lane = (a[0] || "any").toLowerCase();
+      const maxMin = Number(a[1] || 50);
+      const seen = readFileSync(INBOX, "utf8");
+      const start = Date.now();
+      for (;;) {
+        const p = pickFor(load(), lane);
+        if (p) {
+          console.log(`READY ${p.id}: ${p.c[1]}`);
+          break;
+        }
+        const text = readFileSync(INBOX, "utf8");
+        const fresh = text
+          .split("\n")
+          .filter(
+            (l) => !seen.includes(l) && new RegExp(`-> (${lane}|all):`).test(l),
+          );
+        if (fresh.length) {
+          console.log(`MESSAGE\n${fresh.join("\n")}`);
+          break;
+        }
+        if (Date.now() - start > maxMin * 60e3) {
+          console.log(`TIMEOUT after ${maxMin} min: run "wait ${lane}" again.`);
+          process.exit(4);
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000);
+      }
       break;
     }
     case "claim": {
