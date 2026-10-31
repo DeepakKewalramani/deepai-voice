@@ -38,3 +38,11 @@ pub fn register<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), St
         .register(parsed)
         .map_err(|e| e.to_string())
 }
+
+/// Removes the shortcut again, for example once the Fn key tap is running.
+pub fn unregister<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), String> {
+    let parsed = parse(shortcut)?;
+    app.global_shortcut()
+        .unregister(parsed)
+        .map_err(|e| e.to_string())
+}

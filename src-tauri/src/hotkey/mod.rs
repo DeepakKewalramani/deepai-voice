@@ -306,16 +306,28 @@ pub fn start<R: tauri::Runtime>(
     on_action: impl Fn(HotkeyAction) + Send + 'static,
 ) {
     let config = HotkeyConfig::default();
-    if let Err(e) = fallback::register(app, &config.fallback_shortcut) {
-        tracing::warn!("fallback shortcut not registered: {e}");
-    }
+    // Fn is the main key. The backup shortcut is registered only when Fn
+    // cannot be used (no permission, tap failed, or not macOS).
+    let register_fallback = |app: &tauri::AppHandle<R>| {
+        if let Err(e) = fallback::register(app, &config.fallback_shortcut) {
+            tracing::warn!("fallback shortcut not registered: {e}");
+        }
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    register_fallback(app);
 
     #[cfg(target_os = "macos")]
-    if config.primary_is_fn {
+    if !config.primary_is_fn {
+        register_fallback(app);
+    } else {
         let retry_tx = tx.clone();
+        let retry_app = app.clone();
+        let retry_shortcut = config.fallback_shortcut.clone();
         match start_fn_tap(tx, true) {
             FnTapStatus::Started => {}
             FnTapStatus::PermissionMissing => {
+                register_fallback(app);
                 tracing::warn!("Input Monitoring missing, using fallback shortcut");
                 // Re-check every 3 s so granting the permission works without a
                 // restart. Stops once the tap starts or fails for another reason.
@@ -326,6 +338,7 @@ pub fn start<R: tauri::Runtime>(
                             FnTapStatus::PermissionMissing => continue,
                             FnTapStatus::Started => {
                                 tracing::info!("Input Monitoring granted, Fn key tap started");
+                                let _ = fallback::unregister(&retry_app, &retry_shortcut);
                                 break;
                             }
                             FnTapStatus::Failed(e) => {
@@ -336,7 +349,10 @@ pub fn start<R: tauri::Runtime>(
                     }
                 });
             }
-            FnTapStatus::Failed(e) => tracing::warn!("Fn key tap unavailable, using fallback: {e}"),
+            FnTapStatus::Failed(e) => {
+                register_fallback(app);
+                tracing::warn!("Fn key tap unavailable, using fallback: {e}");
+            }
         }
     }
     #[cfg(not(target_os = "macos"))]
