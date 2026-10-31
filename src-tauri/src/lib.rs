@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod logging;
+pub mod paste;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
