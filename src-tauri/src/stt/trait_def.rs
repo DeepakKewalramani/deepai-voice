@@ -1,5 +1,7 @@
 //! Core STT provider trait, shared types, and error classification.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 /// 16 kHz mono PCM audio buffer (f32 samples). Never written to disk.
@@ -26,12 +28,16 @@ pub struct SttOpts {
 }
 
 /// Metrics returned by a provider alongside the transcript.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Usage {
     /// Audio processed in seconds.
     pub audio_seconds: f32,
     /// Provider-assigned request identifier or label.
     pub provider_id: String,
+    /// Tokens processed, when the provider reports them.
+    pub tokens: Option<u32>,
+    /// Characters in the returned text, when known.
+    pub characters: Option<u32>,
 }
 
 /// Output of a successful transcription.
@@ -50,7 +56,7 @@ pub struct Transcript {
 pub enum ProviderError {
     /// Authentication failure (wrong API key, expired token). Retryable after key rotation.
     Auth(String),
-    /// Rate limit hit. Non-retryable in the current chain cycle.
+    /// Rate limit hit. The chain moves to the next provider.
     RateLimit,
     /// Provider timed out before returning a result. Retryable.
     Timeout,
@@ -62,22 +68,26 @@ pub enum ProviderError {
     Server(String),
     /// Feature is not supported by this provider configuration.
     Unsupported,
-    /// Local inference failure (model missing, hardware error). Not retryable.
+    /// Local inference failure (model missing, hardware error). The chain moves to the next
+    /// provider. The message must never contain transcript text.
     Local(String),
 }
 
 impl ProviderError {
     /// Returns `true` if this error is transient and a fallback provider should be tried.
     ///
-    /// `BadRequest`, `Unsupported`, `Local`, and `RateLimit` are not retryable because
-    /// the request itself is the problem and a different provider will likely fail the same way.
+    /// `BadRequest` and `Unsupported` are not retryable because the request itself is the
+    /// problem and a different provider will likely fail the same way. `Local` and `RateLimit`
+    /// fall through (human decision, 31 Oct 2026).
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
             ProviderError::Auth(_)
+                | ProviderError::RateLimit
                 | ProviderError::Timeout
                 | ProviderError::Network(_)
                 | ProviderError::Server(_)
+                | ProviderError::Local(_)
         )
     }
 }
@@ -99,14 +109,14 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// Core trait for all STT providers. Synchronous to keep Tauri commands simple.
-pub trait SttProvider: Send {
+/// Boxed future returned by [`SttProvider::transcribe`], so `dyn SttProvider` stays usable.
+pub type SttFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Transcript, ProviderError>> + Send + 'a>>;
+
+/// Core trait for all STT providers. Async, `&self`, shareable across threads.
+pub trait SttProvider: Send + Sync {
     /// Transcribe 16 kHz mono audio to text.
-    fn transcribe(
-        &mut self,
-        audio: &Pcm16kMono,
-        opts: &SttOpts,
-    ) -> Result<Transcript, ProviderError>;
+    fn transcribe<'a>(&'a self, audio: &'a Pcm16kMono, opts: &'a SttOpts) -> SttFuture<'a>;
 
     /// Human-readable name used in logs and error messages.
     fn name(&self) -> &str;
