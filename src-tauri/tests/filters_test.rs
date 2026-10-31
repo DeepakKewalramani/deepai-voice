@@ -92,3 +92,55 @@ fn test_sanitize_transcript_full_pipeline() {
     let output = sanitize_transcript(input);
     assert_eq!(output, Some("This is a real message.".to_string()));
 }
+
+#[test]
+fn test_sanitize_filler_only_returns_none() {
+    assert_eq!(sanitize_transcript("Um."), None);
+    assert_eq!(sanitize_transcript("Hmm."), None);
+    assert_eq!(sanitize_transcript("Uh, um..."), None);
+    assert_eq!(filter_fillers("Um."), "");
+}
+
+#[test]
+fn test_filler_filter_keeps_hyphenated_words() {
+    assert_eq!(filter_fillers("Uh-huh, that works"), "Uh-huh, that works");
+    assert_eq!(filter_fillers("well, uh-huh"), "well, uh-huh");
+    assert_eq!(filter_fillers("a er-ror b"), "a er-ror b");
+}
+
+#[test]
+fn test_hallucination_punctuation_only_and_variants() {
+    assert!(is_hallucination("."));
+    assert!(is_hallucination("?"));
+    assert!(is_hallucination("..."));
+    assert!(is_hallucination("Thank you!"));
+    assert!(is_hallucination("Thank you. Thank you. Thank you."));
+    assert!(is_hallucination("Thanks for watching!!"));
+    assert_eq!(sanitize_transcript("."), None);
+}
+
+#[test]
+fn test_hallucination_word_loop_with_punctuation() {
+    assert!(is_hallucination("Bye. Bye. bye bye bye"));
+}
+
+#[test]
+fn test_legit_short_text_unchanged() {
+    assert!(!is_hallucination("Thank you for the update"));
+    assert_eq!(
+        sanitize_transcript("Thank you for the update"),
+        Some("Thank you for the update".to_string())
+    );
+}
+
+#[test]
+fn test_filler_filter_capitalizes_only_after_leading_filler_removed() {
+    assert_eq!(filter_fillers("iPhone is great"), "iPhone is great");
+    assert_eq!(filter_fillers("um, iPhone is great"), "IPhone is great");
+}
+
+#[test]
+fn test_short_emphatic_repeat_is_kept() {
+    assert!(!is_hallucination("No, no, no, no."));
+    assert!(is_hallucination("no no no no no"));
+}

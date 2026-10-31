@@ -3,33 +3,56 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-static FILLER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    // Matches standalone fillers with optional preceding or succeeding commas and spaces
-    Regex::new(r"(?i)(?:,\s*)?\b(um|uh|ah|er|hmm)\b(?:,\s*)?").expect("valid filler regex")
-});
-
-static MULTI_SPACE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("valid space regex"));
+const FILLERS: [&str; 5] = ["um", "uh", "ah", "er", "hmm"];
 
 static CLEAN_PUNCT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+([,.!?])").expect("valid punct regex"));
 
-/// Filters standalone conversational fillers from the input text while preserving
-/// words containing filler substrings (e.g. umbrella, human, Uhura).
-pub fn filter_fillers(text: &str) -> String {
-    let replaced = FILLER_RE.replace_all(text, " ");
-    let spaces_cleaned = MULTI_SPACE_RE.replace_all(&replaced, " ");
-    let punct_cleaned = CLEAN_PUNCT_RE.replace_all(&spaces_cleaned, "$1");
-    let trimmed = punct_cleaned.trim();
+fn is_punct(c: char) -> bool {
+    matches!(c, ',' | '.' | '!' | '?' | ';' | ':')
+}
 
-    if trimmed.is_empty() {
+/// Filters standalone conversational fillers from the input text while preserving
+/// words containing filler substrings (e.g. umbrella, human, Uhura, uh-huh).
+/// Returns an empty string when no alphanumeric content remains.
+pub fn filter_fillers(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut capitalize_next = false;
+
+    for token in text.split_whitespace() {
+        let core = token.trim_end_matches(is_punct);
+        let trailing = &token[core.len()..];
+        let is_filler = FILLERS.iter().any(|f| core.eq_ignore_ascii_case(f));
+        if !is_filler {
+            let mut t = token.to_string();
+            if capitalize_next {
+                let mut chars = t.chars();
+                if let Some(first) = chars.next() {
+                    t = first.to_uppercase().collect::<String>() + chars.as_str();
+                }
+                capitalize_next = false;
+            }
+            out.push(t);
+            continue;
+        }
+        // Drop the filler and the comma that preceded it; keep sentence punctuation.
+        let keep: String = trailing.chars().filter(|&c| c != ',').collect();
+        match out.last_mut() {
+            Some(prev) => {
+                if prev.ends_with(',') {
+                    prev.pop();
+                }
+                prev.push_str(&keep);
+            }
+            None => capitalize_next = true,
+        }
+    }
+
+    let joined = out.join(" ");
+    let cleaned = CLEAN_PUNCT_RE.replace_all(&joined, "$1");
+    let trimmed = cleaned.trim();
+    if !trimmed.chars().any(|c| c.is_alphanumeric()) {
         return String::new();
     }
-
-    // Ensure first character is capitalized if ASCII
-    let mut chars = trimmed.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    }
+    trimmed.to_string()
 }
