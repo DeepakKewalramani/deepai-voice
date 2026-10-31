@@ -35,5 +35,13 @@ Rule: nothing system-wide unless needed. No full Xcode (user decision D4, 31 Oct
 | 31 Oct 2026 | typescript-eslint, eslint-plugin-react-hooks, globals (slice 0.3) | 8.72.1, 7.1.1, 17.13.0 | node_modules |
 | 31 Oct 2026 | prettier (slice 0.3) | 3.9.10 | node_modules |
 | 31 Oct 2026 | vitest (slice 0.3) | 5.0.5 | node_modules |
+| 31 Oct 2026 | keyring (crate, features apple-native, windows-native; slice 0.4, 3.x chosen over 4.2.0 for the stable Entry API) | 3.6.3 | src-tauri/target, Cargo.lock |
+| 31 Oct 2026 | tracing, tracing-subscriber, regex (slice 0.5, redacted logging) | 0.1, 0.3, 1.12 | src-tauri/target, Cargo.lock |
 
 Note: `npm audit` reports 11 moderate findings in dev dependencies (31 Oct 2026). Not triaged in 0.3.
+
+## Project dependencies (slice 1.2)
+| Date | Package | Version | Where |
+|---|---|---|---|
+| 31 Oct 2026 | whisper-rs (crate, builds whisper.cpp via whisper-rs-sys 0.15.0, cmake, bindgen) | 0.16.0 | src-tauri/target, Cargo.lock |
+| 31 Oct 2026 | hound (dev crate, reads the WAV fixture in tests) | 3.5.1 | src-tauri/target, Cargo.lock |

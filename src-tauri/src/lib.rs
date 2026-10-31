@@ -2,6 +2,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, image::Image};
 
+pub mod settings;
+
 /// Id of the tray menu item that shows the settings window.
 pub const SETTINGS_ID: &str = "settings";
 /// Id of the tray menu item that quits the app.
