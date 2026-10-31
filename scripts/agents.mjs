@@ -19,33 +19,40 @@ import {
   existsSync,
   statSync,
 } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const BOARD = process.env.BOARD || `${ROOT}docs/tasks/BOARD.md`;
 const INBOX = process.env.INBOX || `${ROOT}docs/tasks/INBOX.md`;
 const BOARD_LOCK = `${ROOT}.git/agents-board.lock`;
+const INBOX_LOCK = `${ROOT}.git/agents-inbox.lock`;
 const GIT_LOCK = `${ROOT}.git/agents-git.lock`;
 const now = () => new Date().toISOString().slice(0, 16).replace("T", " ");
 
-function withBoardLock(fn) {
+function withLock(dir, fn) {
   // mkdir is atomic: only one process can create the directory.
   for (let i = 0; i < 50; i++) {
     try {
-      mkdirSync(BOARD_LOCK);
+      mkdirSync(dir);
       try {
         return fn();
       } finally {
-        rmSync(BOARD_LOCK, { recursive: true, force: true });
+        rmSync(dir, { recursive: true, force: true });
       }
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
-      if (Date.now() - statSync(BOARD_LOCK).mtimeMs > 30000)
-        rmSync(BOARD_LOCK, { recursive: true, force: true });
+      try {
+        if (Date.now() - statSync(dir).mtimeMs > 30000)
+          rmSync(dir, { recursive: true, force: true });
+      } catch (s) {
+        if (s.code !== "ENOENT") throw s; // lock was just released; retry
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
     }
   }
   throw new Error("Board is locked by another agent; try again.");
 }
+const withBoardLock = (fn) => withLock(BOARD_LOCK, fn);
 
 const isRow = (l) => /^\|\s*[A-Z0-9]+\.\d+\s*\|/.test(l);
 const list = (s) =>
@@ -112,13 +119,12 @@ function ready(rows) {
 }
 function pickFor(rows, lane) {
   const { list: rdy } = ready(rows);
-  return (
-    rdy.find((r) => r.lane === lane) ||
-    rdy.find((r) => r.lane === "any") ||
-    rdy[0]
-  );
+  return rdy.find((r) => r.lane === lane) || rdy.find((r) => r.lane === "any");
 }
 function say(from, to, msg) {
+  withLock(INBOX_LOCK, () => sayUnlocked(from, to, msg));
+}
+function sayUnlocked(from, to, msg) {
   const text = readFileSync(INBOX, "utf8");
   const line = `- [${now()}] ${from} -> ${to}: ${msg}`;
   writeFileSync(
@@ -169,6 +175,8 @@ try {
     }
     case "claim": {
       const [id, agent, branch] = a;
+      if (!id || !agent)
+        throw new Error("Usage: claim <slice> <agent> [branch]");
       withBoardLock(() => {
         const rows = load();
         const r = find(rows, id);
@@ -271,7 +279,8 @@ try {
     case "unlock": {
       if (
         existsSync(GIT_LOCK) &&
-        !readFileSync(`${GIT_LOCK}/owner`, "utf8").startsWith(a[0])
+        (!a[0] ||
+          readFileSync(`${GIT_LOCK}/owner`, "utf8").split(" at ")[0] !== a[0])
       )
         throw new Error("Lock is held by another agent.");
       rmSync(GIT_LOCK, { recursive: true, force: true });
