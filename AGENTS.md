@@ -3,7 +3,7 @@
 This is the single source of truth for any AI tool working here: Claude Code, Codex, Cursor, Gemini CLI, Copilot, Antigravity, claude-free, or any other. Tool-specific files (CLAUDE.md, GEMINI.md, .cursor/rules, .github/copilot-instructions.md) only point here.
 
 ## 1. What we are building
-DeepAI Voice: our own product. Dictation, live translator (any language, suggested replies, speak into the call), meeting notes (any call app). Mac first, Windows later. Nothing copied from Wispr Flow or any other product.
+DeepAI Voice: our own product. Dictation, live translator (any language, suggested replies, speak into the call), meeting notes (any call app). Mac first, Windows later. Built from scratch with our own proprietary design and architecture.
 
 ## 2. Read before any work (in this order)
 1. `AGENTS.md` (this file)

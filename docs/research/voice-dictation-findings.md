@@ -12,7 +12,7 @@ Method: crates.io API, raw GitHub files (whisper.cpp README, tauri-docs, global-
 - INFERENCE: lack of Xcode rules out Xcode-project workflows for a native Swift app; SwiftPM builds with CLT may still work (untested).
 
 ## 2. Reference product
-- Wispr Flow: similar product studied from public info only. Nothing from it is reused.
+- Competitor products: studied from public info only. Nothing from them is reused.
 
 ## 3. Tauri and hotkey
 - FACT (crates.io): tauri 2.12.5, tauri-plugin-global-shortcut 2.4.1, global-hotkey 0.9.0, objc2 0.6.5, objc2-app-kit 0.3.2, core-graphics 0.25.0, tauri-nspanel 2.1.1.
