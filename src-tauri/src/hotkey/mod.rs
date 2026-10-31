@@ -324,7 +324,9 @@ pub fn start<R: tauri::Runtime>(
         let retry_tx = tx.clone();
         let retry_app = app.clone();
         let retry_shortcut = config.fallback_shortcut.clone();
-        match start_fn_tap(tx, true) {
+        // No automatic system prompt at launch: the user grants Input Monitoring from
+        // Settings > Permissions, so no popup flashes at every start.
+        match start_fn_tap(tx, false) {
             FnTapStatus::Started => {}
             FnTapStatus::PermissionMissing => {
                 register_fallback(app);
