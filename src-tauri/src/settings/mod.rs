@@ -138,8 +138,14 @@ pub struct LoadResult {
     pub migrated_from: Option<u32>,
     /// Backup path when the file was invalid and defaults were loaded.
     pub backup: Option<PathBuf>,
-    /// True when the file is from a newer app version: do not save over it.
+    /// True when the file must not be saved over: newer app version,
+    /// unreadable file, or an invalid file that could not be backed up.
     pub read_only: bool,
+    /// Provider or style entries skipped because they were invalid.
+    pub dropped_entries: usize,
+    /// Provider ids whose raw key was removed by migration. The UI should ask
+    /// the user to re-enter them. Ids only, never values.
+    pub keys_dropped: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -154,7 +160,7 @@ impl std::fmt::Display for SettingsError {
         match self {
             Self::Io(e) => write!(f, "settings io error: {e}"),
             Self::Json(e) => write!(f, "settings json error: {e}"),
-            Self::ReadOnly => write!(f, "settings file is from a newer version; not saving"),
+            Self::ReadOnly => write!(f, "settings file is read-only for this session; not saving"),
         }
     }
 }
@@ -179,90 +185,138 @@ pub fn settings_path(config_dir: &Path) -> PathBuf {
 }
 
 /// Ordered migrations: entry `i` upgrades version `i` to `i + 1`.
-const MIGRATIONS: &[fn(&mut Value)] = &[migrate_v0_to_v1];
+/// The second argument collects provider ids whose raw key was dropped.
+type Migration = fn(&mut Value, &mut Vec<String>);
+const MIGRATIONS: &[Migration] = &[migrate_v0_to_v1];
 
 /// v0 had no `schemaVersion` and could hold raw `apiKey` values on providers.
 /// v1 moves to `keyRef` only; raw keys are removed and never carried forward.
-fn migrate_v0_to_v1(v: &mut Value) {
+fn migrate_v0_to_v1(v: &mut Value, keys_dropped: &mut Vec<String>) {
     if let Some(providers) = v.get_mut("providers").and_then(Value::as_array_mut) {
         for p in providers.iter_mut().filter_map(Value::as_object_mut) {
-            p.remove("apiKey");
-            p.remove("key");
+            let had_key = p.remove("apiKey").is_some() | p.remove("key").is_some();
+            let id = p.get("id").and_then(Value::as_str).map(str::to_owned);
+            if had_key && let Some(id) = &id {
+                keys_dropped.push(id.clone());
+            }
             let local = p.get("adapter").and_then(Value::as_str) == Some("whisper_local");
             if !local
                 && !p.contains_key("keyRef")
-                && let Some(id) = p.get("id").cloned()
+                && let Some(id) = id
             {
-                p.insert("keyRef".into(), id);
+                p.insert("keyRef".into(), id.into());
             }
         }
     }
 }
 
-/// Runs migrations on a parsed document. Returns the starting version.
-pub fn migrate(mut v: Value) -> Result<(Value, u32), SettingsError> {
-    let from = v.get("schemaVersion").and_then(Value::as_u64).unwrap_or(0) as u32;
+/// Runs migrations from version `from` up to `SCHEMA_VERSION`.
+/// Returns the provider ids whose raw key was dropped.
+pub fn migrate(v: &mut Value, from: u32) -> Vec<String> {
+    let mut keys_dropped = Vec::new();
     for m in MIGRATIONS.iter().skip(from as usize) {
-        m(&mut v);
+        m(v, &mut keys_dropped);
     }
     if let Some(obj) = v.as_object_mut() {
         obj.insert("schemaVersion".into(), SCHEMA_VERSION.into());
     }
-    Ok((v, from))
+    keys_dropped
 }
 
+/// Moves an invalid file aside under a unique name. None if that failed.
 fn backup_invalid(path: &Path) -> Option<PathBuf> {
-    let secs = SystemTime::now()
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis())
         .unwrap_or(0);
-    let backup = path.with_file_name(format!("{SETTINGS_FILE}.{secs}.bak"));
+    let backup = (0..1000)
+        .map(|n| path.with_file_name(format!("{SETTINGS_FILE}.{millis}-{n}.bak")))
+        .find(|b| !b.exists())?;
     fs::rename(path, &backup).ok().map(|_| backup)
 }
 
-/// Loads settings. Never panics: a missing file gives defaults, an invalid
-/// file is backed up and defaults load, a newer version loads read-only.
+/// Parses a list field entry by entry, keeping valid entries and counting
+/// the rest. A non-array value counts as one dropped entry.
+fn take_list<T: serde::de::DeserializeOwned>(
+    v: &mut Value,
+    field: &str,
+    dropped: &mut usize,
+) -> Option<Vec<T>> {
+    let raw = v.as_object_mut()?.remove(field)?;
+    let Value::Array(items) = raw else {
+        *dropped += 1;
+        return Some(Vec::new());
+    };
+    let total = items.len();
+    let kept: Vec<T> = items
+        .into_iter()
+        .filter_map(|i| serde_json::from_value(i).ok())
+        .collect();
+    *dropped += total - kept.len();
+    Some(kept)
+}
+
+/// Loads settings. Never panics and never leaves the user's file at risk:
+/// - missing file: defaults
+/// - unreadable file (permissions, not UTF-8, a directory): defaults, read-only
+/// - invalid JSON: backed up, defaults (read-only if the backup failed)
+/// - newer version: known fields, read-only
+/// - bad provider or style entries: dropped and counted, the rest kept
 pub fn load(path: &Path) -> LoadResult {
-    let fresh = |backup| LoadResult {
-        settings: Settings::default(),
+    let result = |settings, read_only| LoadResult {
+        settings,
         migrated_from: None,
-        backup,
-        read_only: false,
+        backup: None,
+        read_only,
+        dropped_entries: 0,
+        keys_dropped: Vec::new(),
+    };
+    let invalid = || {
+        let backup = backup_invalid(path);
+        let mut r = result(Settings::default(), backup.is_none());
+        r.backup = backup;
+        r
     };
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return fresh(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return result(Settings::default(), false),
+        Err(_) => return result(Settings::default(), true),
     };
-    let value: Value = match serde_json::from_str(&text) {
+    let mut value: Value = match serde_json::from_str(&text) {
         Ok(v @ Value::Object(_)) => v,
-        _ => return fresh(backup_invalid(path)),
+        _ => return invalid(),
     };
     let version = value
         .get("schemaVersion")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    if version > SCHEMA_VERSION as u64 {
-        // Best effort read of known fields; caller must not save.
-        let settings = serde_json::from_value(value).unwrap_or_default();
-        return LoadResult {
-            settings,
-            migrated_from: None,
-            backup: None,
-            read_only: true,
-        };
+    let read_only = version > u64::from(SCHEMA_VERSION);
+    let mut keys_dropped = Vec::new();
+    if !read_only {
+        keys_dropped = migrate(&mut value, version as u32);
     }
-    let (migrated, from) = match migrate(value) {
-        Ok(r) => r,
-        Err(_) => return fresh(backup_invalid(path)),
+    let mut dropped = 0;
+    let providers = take_list::<Provider>(&mut value, "providers", &mut dropped);
+    let styles = take_list::<Style>(&mut value, "styles", &mut dropped);
+    let mut settings: Settings = match serde_json::from_value(value) {
+        Ok(s) => s,
+        Err(_) if read_only => Settings::default(),
+        Err(_) => return invalid(),
     };
-    match serde_json::from_value::<Settings>(migrated) {
-        Ok(settings) => LoadResult {
-            settings,
-            migrated_from: (from < SCHEMA_VERSION).then_some(from),
-            backup: None,
-            read_only: false,
-        },
-        Err(_) => fresh(backup_invalid(path)),
+    if let Some(p) = providers {
+        settings.providers = p;
+    }
+    if let Some(s) = styles {
+        settings.styles = s;
+    }
+    LoadResult {
+        settings,
+        migrated_from: (!read_only && version < u64::from(SCHEMA_VERSION))
+            .then_some(version as u32),
+        backup: None,
+        read_only,
+        dropped_entries: dropped,
+        keys_dropped,
     }
 }
 

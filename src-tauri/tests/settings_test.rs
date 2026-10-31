@@ -94,7 +94,7 @@ fn corrupt_file_is_backed_up_and_defaults_load() {
 fn wrong_types_are_backed_up_not_panicking() {
     let dir = temp_dir("wrongtype");
     let path = settings_path(&dir);
-    fs::write(&path, r#"{"schemaVersion": 1, "providers": "oops"}"#).unwrap();
+    fs::write(&path, r#"{"schemaVersion": 1, "timeouts": "oops"}"#).unwrap();
     let r = load(&path);
     assert_eq!(r.settings, Settings::default());
     assert!(r.backup.is_some());
@@ -170,4 +170,77 @@ fn env_var_overrides_store() {
             .as_deref(),
         Some("from-keychain")
     );
+}
+
+#[test]
+fn unreadable_path_is_read_only_not_defaults_overwrite() {
+    let dir = temp_dir("isdir");
+    let path = settings_path(&dir);
+    fs::create_dir_all(&path).unwrap(); // path is a directory
+    let r = load(&path);
+    assert!(r.read_only);
+    assert!(save(&path, &r.settings, r.read_only).is_err());
+}
+
+#[test]
+fn invalid_utf8_is_read_only() {
+    let dir = temp_dir("utf8");
+    let path = settings_path(&dir);
+    fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+    let r = load(&path);
+    assert!(r.read_only);
+    assert_eq!(fs::read(&path).unwrap(), vec![0xff, 0xfe, 0x00]);
+}
+
+#[test]
+fn two_backups_do_not_clobber() {
+    let dir = temp_dir("twobak");
+    let path = settings_path(&dir);
+    fs::write(&path, "bad one").unwrap();
+    let a = load(&path).backup.unwrap();
+    fs::write(&path, "bad two").unwrap();
+    let b = load(&path).backup.unwrap();
+    assert_ne!(a, b);
+    assert_eq!(fs::read_to_string(a).unwrap(), "bad one");
+    assert_eq!(fs::read_to_string(b).unwrap(), "bad two");
+}
+
+#[test]
+fn bad_list_entry_dropped_rest_kept() {
+    let dir = temp_dir("badentry");
+    let path = settings_path(&dir);
+    fs::write(&path, r#"{
+        "schemaVersion": 1,
+        "providers": [
+            {"id": "a", "kind": "stt", "adapter": "whisper_local"},
+            {"id": 5},
+            {"id": "b", "kind": "llm", "adapter": "anthropic", "keyRef": "anthropic"}
+        ],
+        "styles": [{"id": "x"}, {"id": "clean", "name": "C", "systemPrompt": "s", "userTemplate": "t"}],
+        "maxRecordSeconds": 33
+    }"#).unwrap();
+    let r = load(&path);
+    assert!(r.backup.is_none() && !r.read_only);
+    assert_eq!(r.settings.max_record_seconds, 33);
+    let ids: Vec<_> = r.settings.providers.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["a", "b"]);
+    assert_eq!(r.settings.styles.len(), 1);
+    assert_eq!(r.dropped_entries, 2);
+}
+
+#[test]
+fn migration_reports_dropped_key_ids() {
+    let dir = temp_dir("dropped");
+    let path = settings_path(&dir);
+    fs::write(
+        &path,
+        r#"{"providers": [
+        {"id": "haiku", "kind": "llm", "adapter": "anthropic", "apiKey": "test-secret"},
+        {"id": "whisper-local", "kind": "stt", "adapter": "whisper_local"}
+    ]}"#,
+    )
+    .unwrap();
+    let r = load(&path);
+    assert_eq!(r.keys_dropped, vec!["haiku".to_string()]);
+    assert!(!format!("{r:?}").contains("test-secret"));
 }
