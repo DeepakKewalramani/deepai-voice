@@ -1,4 +1,5 @@
 //! Runs only when models/ggml-base.en.bin exists; otherwise skips with a message.
+//! Set DEEPAI_REQUIRE_MODEL=1 (npm run test:model) to fail instead of skipping.
 
 use std::path::PathBuf;
 
@@ -34,6 +35,12 @@ fn transcribes_fixture_with_base_en() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| repo_root().join(DEFAULT_MODEL_PATH));
     if !model.is_file() {
+        if std::env::var("DEEPAI_REQUIRE_MODEL").as_deref() == Ok("1") {
+            panic!(
+                "DEEPAI_REQUIRE_MODEL=1 but model not found at {}",
+                model.display()
+            );
+        }
         eprintln!(
             "SKIP transcribes_fixture_with_base_en: model not found at {}",
             model.display()

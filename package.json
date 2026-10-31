@@ -16,6 +16,7 @@
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "rust:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:model": "DEEPAI_REQUIRE_MODEL=1 cargo test --manifest-path src-tauri/Cargo.toml --test local_whisper_test -- --nocapture",
     "check": "npm run lint && npm run format && npm run typecheck && npm run test && npm run build && npm run rust:fmt && npm run rust:lint && npm run rust:test"
   },
   "dependencies": {

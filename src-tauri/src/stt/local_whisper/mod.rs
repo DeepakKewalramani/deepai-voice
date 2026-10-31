@@ -45,12 +45,12 @@ pub struct Transcript {
     pub elapsed: Duration,
 }
 
-/// Picks a CPU thread count: available cores, clamped to 4..=8.
+/// Picks a CPU thread count: available cores, at most 8, at least 1.
 pub fn default_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4)
-        .clamp(4, 8)
+        .unwrap_or(1)
+        .clamp(1, 8)
 }
 
 /// A loaded Whisper model and its reusable decode state.
@@ -136,7 +136,7 @@ impl LocalWhisper {
             "local_whisper event=transcribed audio_ms={} elapsed_ms={} chars={}",
             audio.as_millis(),
             elapsed.as_millis(),
-            text.len()
+            text.chars().count()
         );
         Ok(Transcript {
             text,
@@ -162,6 +162,6 @@ mod tests {
     #[test]
     fn threads_are_clamped() {
         let n = default_threads();
-        assert!((4..=8).contains(&n));
+        assert!((1..=8).contains(&n));
     }
 }
