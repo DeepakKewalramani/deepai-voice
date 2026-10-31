@@ -1,0 +1,15 @@
+# secrets
+.env
+.env.*
+*.key
+# local agent state
+.agents/
+# models and large files
+models/
+*.bin
+# build
+node_modules/
+dist/
+target/
+src-tauri/target/
+.DS_Store
