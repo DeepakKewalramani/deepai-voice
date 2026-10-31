@@ -43,30 +43,30 @@ First demo target: Dictation (full) + Live translator preview (USER-PROVIDED, 31
 | 2.9 | Onboarding (permissions, Globe key setting, model download) + .dmg build | Fresh macOS user: install, onboard, dictate |
 | 2.10 | Phase demo check | 10 dictations in 4 apps, timings recorded |
 
-## Phase 3: Meeting notes (branch `phase-3-meetings`)
+## Phase 3: Call audio + Live translator (branch `phase-3-translator`), DEMO PART 2
 | Slice | What | Check |
 |---|---|---|
 | 3.1 | System audio capture (process tap; ScreenCaptureKit fallback) as "Others" channel | Audio from Zoom, Meet in Chrome and YouTube captured, mic separate |
 | 3.2 | Streaming STT with auto language detection, per channel | Live text for both channels; delay measured |
 | 3.3 | "Record this call" toggle + consent screen + recording banner | Shown on first use; banner visible while capturing |
-| 3.4 | Session store (local SQLite, FTS5), encrypted-at-rest option | Session saved, reloaded after restart, search works |
-| 3.5 | Summary, decisions, action items | Output checked on 3 sample meetings |
-| 3.6 | Export Markdown | Export has every segment with side, time and text |
-| 3.7 | Phase demo check | 15-minute test call recorded end to end twice |
+| 3.4 | Translate each segment to chosen languages, original kept, simple-wording option | Mocked LLM tests; manual check with Hindi and Chinese clips |
+| 3.5 | Subtitles window | Readable live subtitles during a test call |
+| 3.6 | Glossary (LLM prompt + DeepL glossary when used) | 5 terms translated identically across 3 sessions |
+| 3.7 | Suggested replies from the whole conversation (both languages) | 2 to 3 replies shown; nothing sent automatically |
+| 3.8 | Own reply typed or spoken in any language, translated | Hindi reply becomes English text |
+| 3.9 | Send: paste to chat | Reply lands in the call app chat box |
+| 3.10 | TTS adapter (ElevenLabs default, provider chain) + play locally | Voice plays in the target language |
+| 3.11 | Speak into the call: virtual mic (BlackHole user-installed for prototype; own "DeepAI Voice Mic" driver after Q24) | The other side hears it in a test call; install logged in INSTALLED.md |
+| 3.12 | Phase demo check | Full 3-minute demo script passes twice |
 
-## Phase 4: Live translator (branch `phase-4-translator`), DEMO PART 2
+## Phase 4: Meeting notes (branch `phase-4-meetings`)
 | Slice | What | Check |
 |---|---|---|
-| 4.1 | Translate each segment to chosen languages, original kept, simple-wording option | Mocked LLM tests; manual check with Hindi and Chinese clips |
-| 4.2 | Subtitles window | Readable live subtitles during a test call |
-| 4.3 | Glossary (LLM prompt + DeepL glossary when used) | 5 terms translated identically across 3 sessions |
-| 4.4 | Suggested replies from the whole conversation (both languages) | 2 to 3 replies shown; nothing sent automatically |
-| 4.5 | Own reply typed or spoken in any language, translated | Hindi reply becomes English text |
-| 4.6 | Send: paste to chat | Reply lands in the call app chat box |
-| 4.7 | TTS adapter (ElevenLabs default, provider chain) + play locally | Voice plays in the target language |
-| 4.8 | Speak into the call: virtual mic (BlackHole user-installed for prototype; own "DeepAI Voice Mic" driver after Q24) | The other side hears it in a test call; install logged in INSTALLED.md |
-| 4.9 | Bilingual transcript saved, nothing lost offline | Network-off test: segments kept as pending |
-| 4.10 | Phase demo check | Full 3-minute demo script passes twice |
+| 4.1 | Session store (local SQLite, FTS5), encrypted-at-rest option | Session saved, reloaded after restart, search works |
+| 4.2 | Summary, decisions, action items | Output checked on 3 sample meetings |
+| 4.3 | Export Markdown | Export has every segment with side, time and text |
+| 4.4 | Bilingual transcript saved, nothing lost offline | Network-off test: segments kept as pending |
+| 4.5 | Phase demo check | 15-minute test call recorded end to end twice |
 
 ## Phase 5: Advanced (branch `phase-5-advanced`), Intel Mac only
 Polish and more providers: Google Docs export, more STT/MT/TTS presets, personal word list, spoken corrections, signed and notarized build (Q24), updater (off by default), performance tuning.
