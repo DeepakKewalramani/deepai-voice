@@ -296,12 +296,14 @@ pub fn open_input_monitoring_settings() {
 
 /// Starts both key sources and the controller loop.
 ///
-/// `tx` must be the sender given to `fallback::plugin`. Actions are logged
-/// (event kind and timing only) until the recorder slice consumes them.
+/// `tx` must be the sender given to `fallback::plugin`. Every action other
+/// than `None` is passed to `on_action` (called on the controller thread, so
+/// it must not block). Event kind and timing only are logged.
 pub fn start<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     tx: std::sync::mpsc::Sender<HotkeyEvent>,
     rx: std::sync::mpsc::Receiver<HotkeyEvent>,
+    on_action: impl Fn(HotkeyAction) + Send + 'static,
 ) {
     let config = HotkeyConfig::default();
     if let Err(e) = fallback::register(app, &config.fallback_shortcut) {
@@ -326,6 +328,9 @@ pub fn start<R: tauri::Runtime>(
         for ev in rx {
             let action = controller.handle(ev, std::time::Instant::now());
             tracing::debug!(?ev, ?action, "hotkey");
+            if action != HotkeyAction::None {
+                on_action(action);
+            }
         }
     });
 }
