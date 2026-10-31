@@ -199,6 +199,7 @@ fn whisper_thread(rx: Receiver<Vec<f32>>, inbox: Sender<Input>) {
 }
 
 fn show_status<R: Runtime>(app: &AppHandle<R>, text: &str) {
+    let _ = tauri::Emitter::emit(app, "dictation-status", text);
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_title(if text.is_empty() { None } else { Some(text) });
     }

@@ -10,12 +10,15 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "DeepAI Voice",
-        "width": 480,
-        "height": 360,
+        "width": 880,
+        "height": 600,
+        "minWidth": 640,
+        "minHeight": 480,
         "visible": false
       }
     ],
