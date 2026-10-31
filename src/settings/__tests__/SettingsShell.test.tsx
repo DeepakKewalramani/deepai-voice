@@ -2,81 +2,133 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsShell } from "../SettingsShell";
 import { defaultSettings } from "../types";
+import { initialState, isDirty, keyTail, maskKey, reducer } from "../state";
 
-describe("SettingsShell", () => {
-  it("renders the settings heading and navigation tabs", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={defaultSettings} activeTab="general" />,
-    );
-    expect(markup).toContain("Settings");
-    expect(markup).toContain("General");
-    expect(markup).toContain("Providers");
-    expect(markup).toContain("Shortcuts");
-    expect(markup).toContain("Styles");
-    expect(markup).toContain("Privacy");
-    expect(markup).toContain("About");
+const withKey = {
+  ...defaultSettings,
+  providers: [
+    ...defaultSettings.providers,
+    {
+      id: "haiku",
+      kind: "llm",
+      adapter: "anthropic",
+      model: "m",
+      keyRef: "anthropic",
+    },
+  ],
+};
+const render = (tab: Parameters<typeof SettingsShell>[0]["activeTab"]) =>
+  renderToStaticMarkup(
+    <SettingsShell initialSettings={withKey} activeTab={tab} />,
+  );
+
+describe("SettingsShell markup", () => {
+  it("renders tablist, tabs and a tabpanel with aria wiring", () => {
+    const m = render("general");
+    expect(m).toContain('role="tablist"');
+    expect(m).toContain('role="tab"');
+    expect(m).toContain('aria-selected="true"');
+    expect(m).toContain('role="tabpanel"');
+    expect(m).toContain('aria-labelledby="tab-general"');
   });
-
-  it("renders General tab content by default", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={defaultSettings} activeTab="general" />,
-    );
-    expect(markup).toContain("Maximum recording duration");
-    expect(markup).toContain("120 seconds");
+  it("labels point at real controls", () => {
+    expect(render("general")).toContain('for="max-duration"');
+    expect(render("general")).toContain('<input id="max-duration"');
+    expect(render("shortcuts")).toContain('<input id="dictate-key"');
   });
-
-  it("renders Providers tab content when active", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={defaultSettings} activeTab="providers" />,
-    );
-    expect(markup).toContain("Speech-to-Text Providers");
-    expect(markup).toContain("whisper-local");
-    expect(markup).toContain("Local Whisper");
+  it("renders each tab", () => {
+    expect(render("providers")).toContain("Local Whisper");
+    expect(render("styles")).toContain("{{transcript}}");
+    expect(render("privacy")).toContain("Local processing by default");
+    expect(render("about")).not.toContain("—");
   });
-
-  it("renders Shortcuts tab content when active", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={defaultSettings} activeTab="shortcuts" />,
-    );
-    expect(markup).toContain("Dictation shortcut");
-    expect(markup).toContain("Ctrl+Alt+Space");
+  it("uses a password input for the key and never renders a key", () => {
+    const m = render("providers");
+    expect(m).toContain('type="password"');
+    expect(m).not.toContain("sk-ant-");
   });
-
-  it("renders Styles tab content with transcript tag validation", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={defaultSettings} activeTab="styles" />,
+  it("shows loading state when loadSettings is given", () => {
+    const m = renderToStaticMarkup(
+      <SettingsShell loadSettings={() => new Promise(() => {})} />,
     );
-    expect(markup).toContain("Clean up");
-    expect(markup).toContain("{{transcript}}");
+    expect(m).toContain("Loading settings");
+    expect(m).not.toContain('role="tabpanel"');
   });
-
-  it("renders Privacy tab content with local data notice", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={defaultSettings} activeTab="privacy" />,
-    );
-    expect(markup).toContain("Privacy &amp; Data Safety");
-    expect(markup).toContain("Local processing by default");
+  it("disables Save and Reset when clean", () => {
+    expect(render("general")).toContain("disabled");
   });
+});
 
-  it("never displays raw API keys in plain text", () => {
-    const settingsWithKey = {
-      ...defaultSettings,
-      providers: [
-        ...defaultSettings.providers,
-        {
-          id: "test-haiku",
-          kind: "llm",
-          adapter: "anthropic",
-          model: "claude-haiku-5-5",
-          keyRef: "anthropic",
-        },
-      ],
-    };
-    const markup = renderToStaticMarkup(
-      <SettingsShell initialSettings={settingsWithKey} activeTab="providers" />,
+describe("settings state", () => {
+  const s0 = initialState(defaultSettings, false);
+  const edited = reducer(s0, {
+    type: "edit",
+    settings: { ...defaultSettings, maxRecordSeconds: 30 },
+  });
+  it("tracks dirty on edit and reset restores initial values", () => {
+    expect(isDirty(s0)).toBe(false);
+    expect(isDirty(edited)).toBe(true);
+    const r = reducer(edited, { type: "reset" });
+    expect(r.settings).toEqual(defaultSettings);
+    expect(isDirty(r)).toBe(false);
+  });
+  it("save clears dirty and sets status", () => {
+    const s = reducer(edited, {
+      type: "saved",
+      settings: edited.settings,
+      keys: {},
+      hints: {},
+    });
+    expect(isDirty(s)).toBe(false);
+    expect(s.status?.text).toBe("Settings saved");
+    expect(s.baseline.maxRecordSeconds).toBe(30);
+  });
+  it("edits typed while saving are kept and stay dirty", () => {
+    const later = reducer(edited, {
+      type: "edit",
+      settings: { ...edited.settings, maxRecordSeconds: 45 },
+    });
+    const s = reducer(later, {
+      type: "saved",
+      settings: edited.settings,
+      keys: {},
+      hints: {},
+    });
+    expect(s.settings.maxRecordSeconds).toBe(45);
+    expect(s.baseline.maxRecordSeconds).toBe(30);
+    expect(isDirty(s)).toBe(true);
+  });
+  it("key draft makes dirty, is cleared on save, only last 4 kept", () => {
+    const k = reducer(s0, {
+      type: "editKey",
+      providerId: "haiku",
+      value: "sk-ant-secret1234",
+    });
+    expect(isDirty(k)).toBe(true);
+    const s = reducer(k, {
+      type: "saved",
+      settings: k.settings,
+      keys: { haiku: "sk-ant-secret1234" },
+      hints: { haiku: keyTail("sk-ant-secret1234") },
+    });
+    expect(s.keyDrafts).toEqual({});
+    expect(JSON.stringify(s)).not.toContain("secret");
+    expect(s.keyHints.haiku).toBe("1234");
+    expect(maskKey("1234")).toBe("••••••••1234");
+  });
+  it("load success and failure", () => {
+    const l = initialState(defaultSettings, true);
+    expect(reducer(l, { type: "loadFailed", message: "x" }).loadError).toBe(
+      "x",
     );
-    // Keys must be masked
-    expect(markup).not.toContain("sk-ant-");
-    expect(markup).toContain("••••••••");
+    const ok = reducer(l, {
+      type: "loaded",
+      settings: { ...defaultSettings, maxRecordSeconds: 5 },
+    });
+    expect(ok.loading).toBe(false);
+    expect(ok.settings.maxRecordSeconds).toBe(5);
+  });
+  it("short keys reveal no tail", () => {
+    expect(keyTail("abc")).toBe("");
   });
 });

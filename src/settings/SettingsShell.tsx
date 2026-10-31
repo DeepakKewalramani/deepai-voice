@@ -1,423 +1,214 @@
-import React, { useState } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
+import "./settings.css";
 import { Settings, SettingsTab, defaultSettings } from "./types";
+import { initialState, isDirty, keyTail, reducer } from "./state";
+import {
+  AboutPanel,
+  GeneralPanel,
+  PrivacyPanel,
+  ProvidersPanel,
+  ShortcutsPanel,
+  StylesPanel,
+} from "./Panels";
 
-interface SettingsShellProps {
+export interface SettingsShellProps {
   initialSettings?: Settings;
+  /** Tab shown first. */
   activeTab?: SettingsTab;
-  onSave?: (settings: Settings) => void;
+  /** Injected loader (Tauri command wrapper later). */
+  loadSettings?: () => Promise<Settings>;
+  /** Receives settings and typed API keys by provider id. Keys are not kept after. */
+  onSave?: (
+    settings: Settings,
+    apiKeys: Record<string, string>,
+  ) => void | Promise<void>;
   onReset?: () => void;
 }
 
+const tabs: { id: SettingsTab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "providers", label: "Providers" },
+  { id: "shortcuts", label: "Shortcuts" },
+  { id: "styles", label: "Styles" },
+  { id: "privacy", label: "Privacy" },
+  { id: "about", label: "About" },
+];
+
 export const SettingsShell: React.FC<SettingsShellProps> = ({
   initialSettings = defaultSettings,
-  activeTab: controlledTab,
+  activeTab = "general",
+  loadSettings,
   onSave,
   onReset,
 }) => {
-  const [currentTab, setCurrentTab] = useState<SettingsTab>(
-    controlledTab || "general",
+  const [state, dispatch] = useReducer(
+    reducer,
+    initialState(initialSettings, loadSettings !== undefined),
   );
-  const [settings] = useState<Settings>(initialSettings);
-  const active = controlledTab !== undefined ? controlledTab : currentTab;
+  const [active, setActive] = useState<SettingsTab>(activeTab);
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  const tabs: { id: SettingsTab; label: string }[] = [
-    { id: "general", label: "General" },
-    { id: "providers", label: "Providers" },
-    { id: "shortcuts", label: "Shortcuts" },
-    { id: "styles", label: "Styles" },
-    { id: "privacy", label: "Privacy" },
-    { id: "about", label: "About" },
-  ];
+  useEffect(() => {
+    if (!loadSettings) return;
+    let cancelled = false;
+    loadSettings().then(
+      (s) => !cancelled && dispatch({ type: "loaded", settings: s }),
+      (e: unknown) =>
+        !cancelled &&
+        dispatch({
+          type: "loadFailed",
+          message: e instanceof Error ? e.message : "Could not load settings",
+        }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSettings]);
+
+  const dirty = isDirty(state);
+
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    const snapshot = state.settings;
+    const keys: Record<string, string> = {};
+    const hints: Record<string, string> = {};
+    for (const [id, v] of Object.entries(state.keyDrafts)) {
+      if (v.length > 0) {
+        keys[id] = v;
+        const tail = keyTail(v);
+        if (tail) hints[id] = tail;
+      }
+    }
+    try {
+      await onSave?.(snapshot, keys);
+      dispatch({ type: "saved", settings: snapshot, keys, hints });
+    } catch {
+      dispatch({ type: "saveFailed", message: "Could not save settings" });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const onTabKey = (e: React.KeyboardEvent, index: number) => {
+    const last = tabs.length - 1;
+    let next = -1;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight")
+      next = index === last ? 0 : index + 1;
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft")
+      next = index === 0 ? last : index - 1;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = last;
+    if (next < 0) return;
+    e.preventDefault();
+    setActive(tabs[next].id);
+    tabRefs.current[tabs[next].id]?.focus();
+  };
+
+  const change = (settings: Settings) => dispatch({ type: "edit", settings });
+  const common = { settings: state.settings, onChange: change };
+
+  let body: React.ReactNode;
+  if (state.loading) {
+    body = (
+      <p className="settings-message" role="status">
+        Loading settings...
+      </p>
+    );
+  } else if (state.loadError) {
+    body = (
+      <p className="settings-message" role="alert">
+        {state.loadError}
+      </p>
+    );
+  } else {
+    body = (
+      <div
+        className="settings-panel"
+        role="tabpanel"
+        id={`panel-${active}`}
+        aria-labelledby={`tab-${active}`}
+      >
+        <h3 className="settings-heading">
+          {tabs.find((t) => t.id === active)?.label}
+        </h3>
+        {active === "general" && <GeneralPanel {...common} />}
+        {active === "providers" && (
+          <ProvidersPanel
+            {...common}
+            keyDrafts={state.keyDrafts}
+            keyHints={state.keyHints}
+            onKeyChange={(providerId, value) =>
+              dispatch({ type: "editKey", providerId, value })
+            }
+          />
+        )}
+        {active === "shortcuts" && <ShortcutsPanel {...common} />}
+        {active === "styles" && <StylesPanel {...common} />}
+        {active === "privacy" && <PrivacyPanel />}
+        {active === "about" && <AboutPanel />}
+      </div>
+    );
+  }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        height: "100vh",
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-        color: "#1f2937",
-        backgroundColor: "#f9fafb",
-      }}
-    >
-      {/* Sidebar Navigation */}
-      <nav
-        aria-label="Settings navigation"
-        style={{
-          width: "180px",
-          backgroundColor: "#f3f4f6",
-          borderRight: "1px solid #e5e7eb",
-          padding: "16px 8px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "4px",
-        }}
-      >
-        <h2
-          style={{
-            fontSize: "14px",
-            fontWeight: "700",
-            padding: "8px 12px",
-            color: "#4b5563",
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-          }}
-        >
-          Settings
-        </h2>
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setCurrentTab(tab.id)}
-            style={{
-              textAlign: "left",
-              padding: "8px 12px",
-              borderRadius: "6px",
-              border: "none",
-              backgroundColor: active === tab.id ? "#ffffff" : "transparent",
-              color: active === tab.id ? "#111827" : "#4b5563",
-              fontWeight: active === tab.id ? "600" : "400",
-              boxShadow:
-                active === tab.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-              cursor: "pointer",
-              fontSize: "13px",
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-
-      {/* Main Content Area */}
-      <main
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          overflowY: "auto",
-        }}
-      >
-        <div style={{ flex: 1, padding: "24px 32px" }}>
-          {active === "general" && (
-            <section aria-labelledby="general-heading">
-              <h3
-                id="general-heading"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: "600",
-                  marginBottom: "16px",
-                }}
-              >
-                General Settings
-              </h3>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "16px",
-                }}
-              >
-                <div>
-                  <label
-                    htmlFor="max-duration"
-                    style={{
-                      display: "block",
-                      fontSize: "13px",
-                      fontWeight: "500",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    Maximum recording duration
-                  </label>
-                  <p
-                    id="max-duration"
-                    style={{ fontSize: "13px", color: "#6b7280" }}
-                  >
-                    {settings.maxRecordSeconds} seconds (120 seconds default cap
-                    to conserve memory)
-                  </p>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {active === "providers" && (
-            <section aria-labelledby="providers-heading">
-              <h3
-                id="providers-heading"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: "600",
-                  marginBottom: "16px",
-                }}
-              >
-                Speech-to-Text Providers
-              </h3>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "12px",
-                }}
-              >
-                {settings.providers.map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      padding: "12px 16px",
-                      backgroundColor: "#ffffff",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: "6px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                      }}
-                    >
-                      <div>
-                        <strong style={{ fontSize: "14px" }}>
-                          {p.id === "whisper-local"
-                            ? "Local Whisper (whisper-local)"
-                            : p.id}
-                        </strong>
-                        <p
-                          style={{
-                            fontSize: "12px",
-                            color: "#6b7280",
-                            marginTop: "2px",
-                          }}
-                        >
-                          Kind: {p.kind.toUpperCase()} | Adapter: {p.adapter} |
-                          Model: {p.model}
-                        </p>
-                      </div>
-                      <span
-                        style={{
-                          fontSize: "11px",
-                          padding: "2px 8px",
-                          backgroundColor: "#dbeafe",
-                          color: "#1e40af",
-                          borderRadius: "12px",
-                        }}
-                      >
-                        {p.keyRef ? "Cloud" : "Device"}
-                      </span>
-                    </div>
-                    {p.keyRef && (
-                      <div style={{ marginTop: "8px", fontSize: "12px" }}>
-                        <span style={{ color: "#4b5563" }}>API Key: </span>
-                        <code style={{ letterSpacing: "2px" }}>••••••••</code>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {active === "shortcuts" && (
-            <section aria-labelledby="shortcuts-heading">
-              <h3
-                id="shortcuts-heading"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: "600",
-                  marginBottom: "16px",
-                }}
-              >
-                Keyboard Shortcuts
-              </h3>
-              <div
-                style={{
-                  backgroundColor: "#ffffff",
-                  padding: "16px",
-                  borderRadius: "6px",
-                  border: "1px solid #e5e7eb",
-                }}
-              >
-                <label
-                  htmlFor="dictate-key"
-                  style={{
-                    display: "block",
-                    fontSize: "13px",
-                    fontWeight: "500",
-                    marginBottom: "6px",
-                  }}
-                >
-                  Dictation shortcut
-                </label>
-                <div
-                  id="dictate-key"
-                  style={{
-                    display: "inline-block",
-                    padding: "4px 8px",
-                    backgroundColor: "#f3f4f6",
-                    border: "1px solid #d1d5db",
-                    borderRadius: "4px",
-                    fontSize: "13px",
-                    fontWeight: "600",
-                    fontFamily: "monospace",
-                  }}
-                >
-                  {settings.hotkeys.dictate}
-                </div>
-                <p
-                  style={{
-                    fontSize: "12px",
-                    color: "#6b7280",
-                    marginTop: "6px",
-                  }}
-                >
-                  Hold Fn (Globe) key or tap fallback combination to record.
-                </p>
-              </div>
-            </section>
-          )}
-
-          {active === "styles" && (
-            <section aria-labelledby="styles-heading">
-              <h3
-                id="styles-heading"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: "600",
-                  marginBottom: "16px",
-                }}
-              >
-                Prompt Styles
-              </h3>
-              {settings.styles.map((style) => (
-                <div
-                  key={style.id}
-                  style={{
-                    backgroundColor: "#ffffff",
-                    padding: "16px",
-                    borderRadius: "6px",
-                    border: "1px solid #e5e7eb",
-                    marginBottom: "12px",
-                  }}
-                >
-                  <strong style={{ fontSize: "14px" }}>{style.name}</strong>
-                  <p
-                    style={{
-                      fontSize: "13px",
-                      color: "#4b5563",
-                      marginTop: "4px",
-                    }}
-                  >
-                    {style.systemPrompt}
-                  </p>
-                  <div style={{ marginTop: "8px" }}>
-                    <span style={{ fontSize: "12px", color: "#6b7280" }}>
-                      Template:{" "}
-                    </span>
-                    <code
-                      style={{
-                        backgroundColor: "#f3f4f6",
-                        padding: "2px 6px",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                      }}
-                    >
-                      {style.userTemplate}
-                    </code>
-                  </div>
-                </div>
-              ))}
-            </section>
-          )}
-
-          {active === "privacy" && (
-            <section aria-labelledby="privacy-heading">
-              <h3
-                id="privacy-heading"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: "600",
-                  marginBottom: "16px",
-                }}
-              >
-                Privacy & Data Safety
-              </h3>
-              <div
-                style={{
-                  backgroundColor: "#ffffff",
-                  padding: "16px",
-                  borderRadius: "6px",
-                  border: "1px solid #e5e7eb",
-                }}
-              >
-                <p style={{ fontSize: "13px", color: "#374151" }}>
-                  <strong>Local processing by default:</strong> Audio recordings
-                  and transcripts are processed strictly in volatile memory. No
-                  audio buffers are saved to disk.
-                </p>
-              </div>
-            </section>
-          )}
-
-          {active === "about" && (
-            <section aria-labelledby="about-heading">
-              <h3
-                id="about-heading"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: "600",
-                  marginBottom: "16px",
-                }}
-              >
-                About DeepAI Voice
-              </h3>
-              <p style={{ fontSize: "13px", color: "#4b5563" }}>
-                DeepAI Voice v0.1.0 — Menu bar dictation, translation, and
-                meeting notes.
-              </p>
-            </section>
-          )}
+    <div className="settings-root">
+      <div className="settings-sidebar">
+        <h2 className="settings-sidebar-title">Settings</h2>
+        <div role="tablist" aria-label="Settings" aria-orientation="vertical">
+          {tabs.map((tab, i) => (
+            <button
+              key={tab.id}
+              ref={(el) => {
+                tabRefs.current[tab.id] = el;
+              }}
+              type="button"
+              role="tab"
+              className="settings-tab"
+              id={`tab-${tab.id}`}
+              aria-selected={active === tab.id}
+              aria-controls={`panel-${tab.id}`}
+              tabIndex={active === tab.id ? 0 : -1}
+              onClick={() => setActive(tab.id)}
+              onKeyDown={(e) => onTabKey(e, i)}
+              style={{ display: "block", width: "100%" }}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
-
-        {/* Footer Actions */}
-        <footer
-          style={{
-            padding: "12px 32px",
-            borderTop: "1px solid #e5e7eb",
-            backgroundColor: "#ffffff",
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: "8px",
-          }}
-        >
+      </div>
+      <main className="settings-main">
+        {body}
+        <footer className="settings-footer">
+          <span
+            className="settings-status"
+            role="status"
+            data-kind={state.status?.kind}
+          >
+            {state.status?.text ?? (dirty ? "Unsaved changes" : "")}
+          </span>
           <button
             type="button"
-            onClick={onReset}
-            style={{
-              padding: "6px 12px",
-              borderRadius: "4px",
-              border: "1px solid #d1d5db",
-              backgroundColor: "#ffffff",
-              fontSize: "13px",
-              cursor: "pointer",
+            className="settings-btn"
+            disabled={!dirty}
+            onClick={() => {
+              dispatch({ type: "reset" });
+              onReset?.();
             }}
           >
             Reset
           </button>
           <button
             type="button"
-            onClick={() => onSave?.(settings)}
-            style={{
-              padding: "6px 16px",
-              borderRadius: "4px",
-              border: "none",
-              backgroundColor: "#2563eb",
-              color: "#ffffff",
-              fontWeight: "500",
-              fontSize: "13px",
-              cursor: "pointer",
-            }}
+            className="settings-btn settings-btn-primary"
+            disabled={!dirty || saving}
+            onClick={handleSave}
           >
             Save
           </button>
