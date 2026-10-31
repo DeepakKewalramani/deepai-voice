@@ -29,17 +29,20 @@ Tauri v2 + Rust for native parts only (audio, Whisper, hotkey, paste, secure fie
 - Questions only the human can answer go to `HUMAN_INPUT.md` with a recommended default. Continue other safe work.
 
 ## 5. Commands
-Run from the repo root. All must pass before a PR.
+Run from the repo root.
+
+Checks (must pass before every PR). `npm run check` runs these, in this order, and stops at the first failure:
 | Command | What it does |
 |---|---|
-| `npm install` | Install JS dependencies |
-| `npm run tauri dev` | Run the app in dev mode |
-| `npm run tauri build -- --debug` | Debug build, bundle at `src-tauri/target/debug/bundle/macos/DeepAI Voice.app` |
-| `npm run lint` | ESLint on TS/TSX |
-| `npm run format` | Prettier check (`npm run format:write` to fix) |
-| `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint on `src/` and root config files |
+| `npm run format` | Prettier check (`npm run format:write` to fix; markdown excluded) |
+| `npm run typecheck` | `tsc --noEmit` for `tsconfig.json` (app) and `tsconfig.node.json` (vite.config.ts) |
 | `npm run test` | Vitest unit tests |
+| `npm run build` | Frontend build (`tsc && vite build`) |
 | `npm run rust:fmt` | `cargo fmt --check` |
 | `npm run rust:lint` | `cargo clippy --all-targets -- -D warnings` |
 | `npm run rust:test` | `cargo test` |
-| `npm run check` | All of the above checks in order, stops at the first failure |
+
+Pre-merge release check (not in `check`, slow): `npm run tauri build -- --debug`, bundle at `src-tauri/target/debug/bundle/macos/DeepAI Voice.app`, then launch it.
+
+Not a check: `npm install` (setup), `npm run tauri dev` (dev run with hot reload).
