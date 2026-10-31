@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod logging;
 
 use tauri::menu::{Menu, MenuItem};
