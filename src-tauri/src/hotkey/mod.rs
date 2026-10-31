@@ -312,10 +312,29 @@ pub fn start<R: tauri::Runtime>(
 
     #[cfg(target_os = "macos")]
     if config.primary_is_fn {
+        let retry_tx = tx.clone();
         match start_fn_tap(tx, true) {
             FnTapStatus::Started => {}
             FnTapStatus::PermissionMissing => {
-                tracing::warn!("Input Monitoring missing, using fallback shortcut")
+                tracing::warn!("Input Monitoring missing, using fallback shortcut");
+                // Re-check every 3 s so granting the permission works without a
+                // restart. Stops once the tap starts or fails for another reason.
+                std::thread::spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        match retry_fn_tap(retry_tx.clone()) {
+                            FnTapStatus::PermissionMissing => continue,
+                            FnTapStatus::Started => {
+                                tracing::info!("Input Monitoring granted, Fn key tap started");
+                                break;
+                            }
+                            FnTapStatus::Failed(e) => {
+                                tracing::warn!("Fn key tap unavailable after retry: {e}");
+                                break;
+                            }
+                        }
+                    }
+                });
             }
             FnTapStatus::Failed(e) => tracing::warn!("Fn key tap unavailable, using fallback: {e}"),
         }
