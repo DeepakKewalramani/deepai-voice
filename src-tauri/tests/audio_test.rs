@@ -2,7 +2,12 @@ use std::f32::consts::PI;
 
 use deepai_voice_lib::audio::meter::{calculate_peak_db, calculate_rms, calculate_rms_db};
 use deepai_voice_lib::audio::resample::{downmix_to_mono, resample_to_16k};
-use deepai_voice_lib::audio::{AudioCaptureConfig, InMemoryAudioBuffer};
+use std::sync::{Arc, Mutex};
+
+use deepai_voice_lib::audio::{
+    AudioCaptureConfig, InMemoryAudioBuffer, LevelMeterEvent, MicPermissionProvider,
+    MicPermissionStatus, RawChunkSink, check_microphone_permission_with,
+};
 
 #[test]
 fn test_downmix_to_mono_stereo() {
@@ -81,6 +86,21 @@ fn test_resample_48k_to_16k_sine_wave() {
     let in_rms = calculate_rms(&input);
     let out_rms = calculate_rms(&resampled);
     assert!((in_rms - out_rms).abs() < 0.1);
+
+    // Frequency check: zero crossings of the output must match 440 Hz at 16 kHz.
+    // Skip edges where the resampler settles.
+    let body = &resampled[100..resampled.len() - 100];
+    let crossings = body
+        .windows(2)
+        .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+        .count();
+    let secs = body.len() as f32 / 16000.0;
+    let est_hz = crossings as f32 / 2.0 / secs;
+    assert!((est_hz - freq).abs() < 15.0, "estimated {} Hz", est_hz);
+
+    // Amplitude check: peak stays near 1.0 in the settled region.
+    let peak = body.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    assert!((peak - 1.0).abs() < 0.1, "peak {}", peak);
 }
 
 #[test]
@@ -123,13 +143,90 @@ fn test_in_memory_buffer_transient_discard_and_cap() {
 
 #[test]
 fn test_in_memory_buffer_zero_disk_writes() {
-    // Verify that InMemoryAudioBuffer operates purely in RAM and creates no files
+    // Pushing audio must not create any file in the temp dir or the working dir.
+    // (Source also has no std::fs usage under src/audio; checked in the next test.)
+    let list = |dir: &std::path::Path| -> std::collections::BTreeSet<std::ffi::OsString> {
+        std::fs::read_dir(dir)
+            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name()).collect())
+            .unwrap_or_default()
+    };
+    let tmp = std::env::temp_dir();
+    let cwd = std::env::current_dir().unwrap();
+    let (tmp_before, cwd_before) = (list(&tmp), list(&cwd));
+
     let config = AudioCaptureConfig {
         discard_transient_ms: 0,
         max_record_seconds: 120,
     };
     let mut buf = InMemoryAudioBuffer::new(16000, config);
     buf.push_samples(&[0.1, 0.2, 0.3]);
-    let samples = buf.into_samples();
-    assert_eq!(samples.len(), 3);
+    assert_eq!(buf.into_samples().len(), 3);
+
+    // Other tests may run concurrently; only audio-looking new files count.
+    let new_audio = |before: &std::collections::BTreeSet<std::ffi::OsString>,
+                     dir: &std::path::Path| {
+        list(dir).difference(before).any(|n| {
+            let n = n.to_string_lossy().to_lowercase();
+            n.ends_with(".wav") || n.ends_with(".raw") || n.ends_with(".pcm") || n.contains("audio")
+        })
+    };
+    assert!(!new_audio(&tmp_before, &tmp));
+    assert!(!new_audio(&cwd_before, &cwd));
+}
+
+#[test]
+fn test_audio_module_has_no_fs_apis() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/audio");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let src = std::fs::read_to_string(&path).unwrap();
+        for banned in ["std::fs", "File::create", "tempfile", "hound"] {
+            assert!(!src.contains(banned), "{:?} uses {}", path, banned);
+        }
+    }
+}
+
+#[test]
+fn test_raw_sink_bounds_memory_during_recording() {
+    // Cap of 1000 raw samples; feed 10 x 400 samples.
+    let mut sink = RawChunkSink::new(1000, None);
+    let mut kept = 0;
+    for _ in 0..10 {
+        if let Some(c) = sink.handle(&[0.1; 400]) {
+            kept += c.len();
+        }
+    }
+    assert_eq!(kept, 1000);
+    assert!(sink.handle(&[0.1; 10]).is_none());
+}
+
+#[test]
+fn test_raw_sink_emits_level_events_even_past_cap() {
+    let events: Arc<Mutex<Vec<LevelMeterEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    let mut sink = RawChunkSink::new(100, Some(Arc::new(move |e| ev.lock().unwrap().push(e))));
+    sink.handle(&[0.5; 100]);
+    sink.handle(&[0.0; 100]);
+    let got = events.lock().unwrap();
+    assert_eq!(got.len(), 2);
+    assert!((got[0].rms_db - (-6.02)).abs() < 0.1);
+    assert!(!got[0].is_silent);
+    assert!(got[1].is_silent);
+}
+
+#[test]
+fn test_permission_provider_seam() {
+    struct Fake(MicPermissionStatus);
+    impl MicPermissionProvider for Fake {
+        fn status(&self) -> MicPermissionStatus {
+            self.0
+        }
+    }
+    for st in [
+        MicPermissionStatus::Granted,
+        MicPermissionStatus::Denied,
+        MicPermissionStatus::Undetermined,
+    ] {
+        assert_eq!(check_microphone_permission_with(&Fake(st)), st);
+    }
 }
