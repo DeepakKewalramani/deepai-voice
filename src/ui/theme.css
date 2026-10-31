@@ -1,0 +1,111 @@
+/* Layout: app shell with a left sidebar (brand, nav, version) and a calm,
+   spacious content column. Soft off-white ground, white cards with faint
+   borders, one warm accent. Neutrals lean slightly warm to match. */
+:root {
+  --c-bg: #f7f6f3;
+  --c-sidebar: #f0eeea;
+  --c-surface: #ffffff;
+  --c-surface-2: #fbfaf8;
+  --c-sunken: #efede8;
+  --c-border: #e9e6e0;
+  --c-border-strong: #d8d4cc;
+  --c-text: #2b2925;
+  --c-text-strong: #171613;
+  --c-text-muted: #77736b;
+  --c-accent: #d4622a;
+  --c-accent-hover: #bf5420;
+  --c-accent-soft: #fbebe1;
+  --c-accent-text: #ffffff;
+  --c-ring: rgba(212, 98, 42, 0.32);
+  --c-ok: #2f8a52;
+  --c-ok-soft: #e4f3e9;
+  --c-rec: #dd3b3b;
+  --c-rec-soft: #fbe5e3;
+  --c-busy: #4f63c9;
+  --c-busy-soft: #e7eafa;
+  --c-error: #c42f2f;
+  --c-error-soft: #fbe5e3;
+  --c-kbd-bg: #ffffff;
+  --c-kbd-edge: #d3cec5;
+  --shadow-sm: 0 1px 2px rgba(40, 30, 20, 0.05);
+  --shadow-md:
+    0 1px 2px rgba(40, 30, 20, 0.04), 0 8px 24px rgba(40, 30, 20, 0.05);
+
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-display:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg: #1b1a18;
+    --c-sidebar: #161513;
+    --c-surface: #24231f;
+    --c-surface-2: #201f1c;
+    --c-sunken: #2e2c28;
+    --c-border: #33312c;
+    --c-border-strong: #46433d;
+    --c-text: #e8e5df;
+    --c-text-strong: #faf8f4;
+    --c-text-muted: #a19c92;
+    --c-accent: #ee8150;
+    --c-accent-hover: #f39368;
+    --c-accent-soft: #3d2a1f;
+    --c-accent-text: #1b1a18;
+    --c-ring: rgba(238, 129, 80, 0.45);
+    --c-ok: #5cc685;
+    --c-ok-soft: #1f3327;
+    --c-rec: #ff6b66;
+    --c-rec-soft: #40211f;
+    --c-busy: #8d9cf2;
+    --c-busy-soft: #262b45;
+    --c-error: #ff7a73;
+    --c-error-soft: #40211f;
+    --c-kbd-bg: #302e29;
+    --c-kbd-edge: #141311;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.2);
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}

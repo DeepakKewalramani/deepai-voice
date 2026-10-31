@@ -1,11 +1,76 @@
+import React, { useState } from "react";
+import "./ui/theme.css";
+import "./ui/shell.css";
 import { SettingsShell } from "./settings";
+import { useDictationStatus } from "./ui/useDictationStatus";
+import { DictionaryView, HomeView, ViewHeader } from "./ui/views";
+import { BookIcon, GearIcon, HomeIcon, LogoMark, StylesIcon } from "./ui/icons";
 
-function App() {
+type View = "home" | "dictionary" | "styles" | "settings";
+
+const nav: { id: View; label: string; icon: React.ReactNode }[] = [
+  { id: "home", label: "Home", icon: <HomeIcon /> },
+  { id: "dictionary", label: "Dictionary", icon: <BookIcon /> },
+  { id: "styles", label: "Styles", icon: <StylesIcon /> },
+  { id: "settings", label: "Settings", icon: <GearIcon /> },
+];
+
+function App({ initialView = "home" }: { initialView?: View }) {
+  const status = useDictationStatus();
+  const [view, setView] = useState<View>(initialView);
+
   return (
-    <main>
-      <h1>DeepAI Voice</h1>
-      <SettingsShell />
-    </main>
+    <div className="shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <LogoMark />
+          <h1>DeepAI Voice</h1>
+        </div>
+        <nav className="nav" aria-label="Main">
+          <ul>
+            {nav.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className="nav-item"
+                  aria-current={view === item.id ? "page" : undefined}
+                  onClick={() => setView(item.id)}
+                  title={item.label}
+                >
+                  {item.icon}
+                  <span className="nav-label">{item.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <p className="sidebar-footer">Version 0.1.0</p>
+      </aside>
+      <main className="content">
+        {view === "home" && <HomeView status={status} />}
+        {view === "dictionary" && <DictionaryView />}
+        {view === "styles" && (
+          <div className="view view-fill">
+            <ViewHeader
+              title="Styles"
+              subtitle="Choose how your dictated text should be cleaned up."
+            />
+            <SettingsShell activeTab="styles" tabs={["styles"]} />
+          </div>
+        )}
+        {view === "settings" && (
+          <div className="view view-fill">
+            <ViewHeader
+              title="Settings"
+              subtitle="Recording, providers, shortcuts and privacy."
+            />
+            <SettingsShell
+              tabs={["general", "providers", "shortcuts", "privacy", "about"]}
+            />
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
 

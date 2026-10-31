@@ -8,7 +8,7 @@ interface PanelProps {
 }
 
 export const GeneralPanel: React.FC<PanelProps> = ({ settings, onChange }) => (
-  <div>
+  <div className="settings-card settings-field">
     <label className="settings-label" htmlFor="max-duration">
       Maximum recording duration (seconds)
     </label>
@@ -62,7 +62,7 @@ export const ProvidersPanel: React.FC<ProvidersProps> = ({
           </span>
         </div>
         {p.keyRef && (
-          <div style={{ marginTop: 8 }}>
+          <div className="settings-key">
             <label className="settings-label" htmlFor={`key-${p.id}`}>
               API key for {p.id}
             </label>
@@ -90,7 +90,7 @@ export const ShortcutsPanel: React.FC<PanelProps> = ({
   settings,
   onChange,
 }) => (
-  <div className="settings-card">
+  <div className="settings-card settings-field">
     <label className="settings-label" htmlFor="dictate-key">
       Dictation shortcut
     </label>
@@ -111,22 +111,24 @@ export const ShortcutsPanel: React.FC<PanelProps> = ({
 
 export const StylesPanel: React.FC<PanelProps> = ({ settings, onChange }) => (
   <div>
-    <label className="settings-label" htmlFor="active-style">
-      Active style
-    </label>
-    <select
-      id="active-style"
-      className="settings-input"
-      value={settings.activeStyle}
-      onChange={(e) => onChange({ ...settings, activeStyle: e.target.value })}
-    >
-      {settings.styles.map((s) => (
-        <option key={s.id} value={s.id}>
-          {s.name}
-        </option>
-      ))}
-    </select>
-    <div style={{ marginTop: 16 }}>
+    <div className="settings-card settings-field">
+      <label className="settings-label" htmlFor="active-style">
+        Active style
+      </label>
+      <select
+        id="active-style"
+        className="settings-input"
+        value={settings.activeStyle}
+        onChange={(e) => onChange({ ...settings, activeStyle: e.target.value })}
+      >
+        {settings.styles.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </select>
+    </div>
+    <div className="settings-list">
       {settings.styles.map((s) => (
         <div className="settings-card" key={s.id}>
           <strong>{s.name}</strong>
@@ -151,7 +153,9 @@ export const PrivacyPanel: React.FC = () => (
 );
 
 export const AboutPanel: React.FC = () => (
-  <p className="settings-text">
-    DeepAI Voice v0.1.0. Menu bar dictation, translation, and meeting notes.
-  </p>
+  <div className="settings-card">
+    <p className="settings-text">
+      DeepAI Voice v0.1.0. Menu bar dictation, translation, and meeting notes.
+    </p>
+  </div>
 );

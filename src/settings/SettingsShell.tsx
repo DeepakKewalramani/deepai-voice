@@ -23,9 +23,11 @@ export interface SettingsShellProps {
     apiKeys: Record<string, string>,
   ) => void | Promise<void>;
   onReset?: () => void;
+  /** Tabs to show, in order. Defaults to all. One tab renders without a tab bar. */
+  tabs?: SettingsTab[];
 }
 
-const tabs: { id: SettingsTab; label: string }[] = [
+const allTabs: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "providers", label: "Providers" },
   { id: "shortcuts", label: "Shortcuts" },
@@ -40,12 +42,17 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
   loadSettings,
   onSave,
   onReset,
+  tabs: tabIds,
 }) => {
+  const tabs = tabIds ? allTabs.filter((t) => tabIds.includes(t.id)) : allTabs;
+  const single = tabs.length === 1;
   const [state, dispatch] = useReducer(
     reducer,
     initialState(initialSettings, loadSettings !== undefined),
   );
-  const [active, setActive] = useState<SettingsTab>(activeTab);
+  const [active, setActive] = useState<SettingsTab>(
+    tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0].id,
+  );
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
@@ -130,13 +137,15 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
     body = (
       <div
         className="settings-panel"
-        role="tabpanel"
+        role={single ? undefined : "tabpanel"}
         id={`panel-${active}`}
-        aria-labelledby={`tab-${active}`}
+        aria-labelledby={single ? undefined : `tab-${active}`}
       >
-        <h3 className="settings-heading">
-          {tabs.find((t) => t.id === active)?.label}
-        </h3>
+        {!single && (
+          <h3 className="settings-heading">
+            {tabs.find((t) => t.id === active)?.label}
+          </h3>
+        )}
         {active === "general" && <GeneralPanel {...common} />}
         {active === "providers" && (
           <ProvidersPanel
@@ -158,32 +167,37 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
 
   return (
     <div className="settings-root">
-      <div className="settings-sidebar">
-        <h2 className="settings-sidebar-title">Settings</h2>
-        <div role="tablist" aria-label="Settings" aria-orientation="vertical">
-          {tabs.map((tab, i) => (
-            <button
-              key={tab.id}
-              ref={(el) => {
-                tabRefs.current[tab.id] = el;
-              }}
-              type="button"
-              role="tab"
-              className="settings-tab"
-              id={`tab-${tab.id}`}
-              aria-selected={active === tab.id}
-              aria-controls={`panel-${tab.id}`}
-              tabIndex={active === tab.id ? 0 : -1}
-              onClick={() => setActive(tab.id)}
-              onKeyDown={(e) => onTabKey(e, i)}
-              style={{ display: "block", width: "100%" }}
-            >
-              {tab.label}
-            </button>
-          ))}
+      {!single && (
+        <div className="settings-tabbar">
+          <div
+            role="tablist"
+            aria-label="Settings"
+            aria-orientation="horizontal"
+            className="settings-tablist"
+          >
+            {tabs.map((tab, i) => (
+              <button
+                key={tab.id}
+                ref={(el) => {
+                  tabRefs.current[tab.id] = el;
+                }}
+                type="button"
+                role="tab"
+                className="settings-tab"
+                id={`tab-${tab.id}`}
+                aria-selected={active === tab.id}
+                aria-controls={`panel-${tab.id}`}
+                tabIndex={active === tab.id ? 0 : -1}
+                onClick={() => setActive(tab.id)}
+                onKeyDown={(e) => onTabKey(e, i)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
-      <main className="settings-main">
+      )}
+      <div className="settings-main">
         {body}
         <footer className="settings-footer">
           <span
@@ -213,7 +227,7 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
             Save
           </button>
         </footer>
-      </main>
+      </div>
     </div>
   );
 };
