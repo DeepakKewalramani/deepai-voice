@@ -29,6 +29,7 @@ keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
 cpal = "0.18.2"
 rubato = "5.0.1"
 arboard = "3"
+tauri-plugin-global-shortcut = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

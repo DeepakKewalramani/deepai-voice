@@ -57,3 +57,4 @@ Note: `npm audit` reports 11 moderate findings in dev dependencies (31 Oct 2026)
 |---|---|---|---|
 | 31 Oct 2026 | arboard (crate, clipboard read/write; clipboard access only, not for audio) | 3.x | src-tauri/target, Cargo.lock |
 | 31 Oct 2026 | objc2 0.6.5, objc2-av-foundation 0.3.2, block2 0.6.2 (macOS target only; Zlib OR Apache-2.0 OR MIT; block2 is direct because the permission completion handler needs RcBlock) | real AVFoundation mic permission status and request (slice 1.1), approved by human | src-tauri/Cargo.toml, Cargo.lock |
+| 31 Oct 2026 | tauri-plugin-global-shortcut 2.4.1 (crate; Apache-2.0 OR MIT; official Tauri plugin) | Ctrl+Option+Space fallback hold-to-talk hotkey (slice 2.1), approved by human | src-tauri/Cargo.toml, Cargo.lock |

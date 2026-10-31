@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod hotkey;
 pub mod logging;
 pub mod paste;
 
@@ -40,8 +41,11 @@ pub fn tray_action(id: &str) -> TrayAction {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
     tauri::Builder::default()
-        .setup(|app| {
+        .plugin(hotkey::fallback::plugin(hotkey_tx.clone()))
+        .setup(move |app| {
+            hotkey::start(app.handle(), hotkey_tx, hotkey_rx);
             // Menu bar app: no Dock icon on macOS.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
