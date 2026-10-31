@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "Standard 16 kHz 16-bit mono WAV audio fixtures for STT and audio pipeline unit tests.",
+  "fixtures": [
+    {
+      "id": "01_english_greeting",
+      "filename": "01_english_greeting.wav",
+      "sampleRate": 16000,
+      "channels": 1,
+      "bitDepth": 16,
+      "purpose": "Baseline English speech-to-text accuracy test",
+      "spokenText": "Hello world, this is a test of voice dictation.",
+      "expectedText": "Hello world, this is a test of voice dictation."
+    },
+    {
+      "id": "02_english_email",
+      "filename": "02_english_email.wav",
+      "sampleRate": 16000,
+      "channels": 1,
+      "bitDepth": 16,
+      "purpose": "Productivity sentence transcription",
+      "spokenText": "Please review the pull request and let me know your thoughts.",
+      "expectedText": "Please review the pull request and let me know your thoughts."
+    },
+    {
+      "id": "03_filler_words",
+      "filename": "03_filler_words.wav",
+      "sampleRate": 16000,
+      "channels": 1,
+      "bitDepth": 16,
+      "purpose": "Filler filter and post-processing cleanup testing",
+      "spokenText": "Um, I was thinking, uh, we should ship this today, you know.",
+      "expectedTextCleaned": "I was thinking we should ship this today, you know."
+    },
+    {
+      "id": "04_technical_terms",
+      "filename": "04_technical_terms.wav",
+      "sampleRate": 16000,
+      "channels": 1,
+      "bitDepth": 16,
+      "purpose": "Technical vocabulary and acronym handling",
+      "spokenText": "DeepAI Voice runs on Tauri version two with Rust and React.",
+      "expectedText": "DeepAI Voice runs on Tauri version two with Rust and React."
+    },
+    {
+      "id": "05_numbers_and_punctuation",
+      "filename": "05_numbers_and_punctuation.wav",
+      "sampleRate": 16000,
+      "channels": 1,
+      "bitDepth": 16,
+      "purpose": "Numeric phrasing and time representations",
+      "spokenText": "Meeting at three PM with twelve engineers in room four.",
+      "expectedText": "Meeting at three PM with twelve engineers in room four."
+    },
+    {
+      "id": "06_silence",
+      "filename": "06_silence.wav",
+      "sampleRate": 16000,
+      "channels": 1,
+      "bitDepth": 16,
+      "purpose": "Silence gate and low-RMS discard filter testing",
+      "spokenText": "",
+      "expectedText": ""
+    }
+  ]
+}
