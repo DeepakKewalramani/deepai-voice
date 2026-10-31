@@ -3,8 +3,8 @@
 | Slice | Title | Status | Owner agent | Branch | Updated |
 |---|---|---|---|---|---|
 | 0.1 | git init, .gitignore, README, docs map | IN PROGRESS | Claude (main session) | main (first commit), then phase-0-setup | 31 Oct 2026 |
-| 0.2 | Tauri + React + TS + Vite scaffold, menu bar app | TODO | | | |
-| 0.3 | Lint, format, typecheck, tests, scripts | TODO | | | |
+| 0.2 | Tauri + React + TS + Vite scaffold, menu bar app | IN PROGRESS | Claude subagent builder | phase-0/0.2-scaffold | 31 Oct 2026 |
+| 0.3 | Lint, format, typecheck, tests, scripts | IN PROGRESS | Claude subagent builder | phase-0/0.2-scaffold | 31 Oct 2026 |
 | 0.4 | Settings store + Keychain | TODO | | | |
 | 0.5 | Redacted logging | TODO | | | |
 
