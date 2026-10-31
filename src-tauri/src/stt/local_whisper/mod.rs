@@ -89,7 +89,7 @@ impl LocalWhisper {
         // Warm-up: one second of silence so the first real call is not cold.
         engine.transcribe_timed(&vec![0.0; SAMPLE_RATE])?;
         engine.load_time = started.elapsed();
-        eprintln!(
+        tracing::info!(
             "local_whisper event=model_loaded threads={} load_ms={}",
             engine.threads,
             engine.load_time.as_millis()
@@ -131,8 +131,7 @@ impl LocalWhisper {
         let text = text.trim().to_string();
         let elapsed = started.elapsed();
         let audio = Duration::from_secs_f64(samples.len() as f64 / SAMPLE_RATE as f64);
-        // Slice 0.5 owns `tracing`; switch to it once that lands.
-        eprintln!(
+        tracing::info!(
             "local_whisper event=transcribed audio_ms={} elapsed_ms={} chars={}",
             audio.as_millis(),
             elapsed.as_millis(),

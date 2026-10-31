@@ -45,9 +45,3 @@ Note: `npm audit` reports 11 moderate findings in dev dependencies (31 Oct 2026)
 |---|---|---|---|
 | 31 Oct 2026 | whisper-rs (crate, builds whisper.cpp via whisper-rs-sys 0.15.0, cmake, bindgen) | 0.16.0 | src-tauri/target, Cargo.lock |
 | 31 Oct 2026 | hound (dev crate, reads the WAV fixture in tests) | 3.5.1 | src-tauri/target, Cargo.lock |
-
-## Project dependencies (slice 1.2)
-| Date | Package | Version | Where |
-|---|---|---|---|
-| 31 Oct 2026 | whisper-rs (crate, builds whisper.cpp via whisper-rs-sys 0.15.0, cmake, bindgen) | 0.16.0 | src-tauri/target, Cargo.lock |
-| 31 Oct 2026 | hound (dev crate, reads the WAV fixture in tests) | 3.5.1 | src-tauri/target, Cargo.lock |
