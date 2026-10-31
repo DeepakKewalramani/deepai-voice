@@ -11,7 +11,7 @@ A slice is offered only when every Depends slice is DONE and its Owns paths do n
 | 0.3 | Lint, format, typecheck, tests, scripts | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/2 | Claude subagent builder | phase-0/0.2-scaffold | 2026-10-31 13:21 | claude | 0.2 | package.json, eslint.config, .prettierrc |
 | 0.4 | Settings store + Keychain | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | claude-builder-settings | phase-0-foundation | 2026-10-31 13:55 | claude | 0.3 | src-tauri/src/settings/ |
 | 0.5 | Redacted logging | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | antigravity-builder | phase-0-foundation | 2026-10-31 13:55 | antigravity | 0.3 | src-tauri/src/logging/ |
-| 1.1 | Mic permission + 16 kHz mono capture in memory | TODO |  |  |  | claude | 0.4, 0.5 | src-tauri/src/audio/ |
+| 1.1 | Mic permission + 16 kHz mono capture in memory | IN REVIEW | antigravity-builder | phase-1/1.1 | 2026-10-31 14:12 | claude | 0.4, 0.5 | src-tauri/src/audio/ |
 | 1.2 | Whisper base.en load once + transcribe fixture | DONE https://github.com/DeepakKewalramani/deepai-voice/pull/3 | claude-builder-whisper | phase-0-foundation | 2026-10-31 13:55 | claude | 0.3 | src-tauri/src/stt/local_whisper/ |
 | 1.3 | Silence, too-short, hallucination filters | IN REVIEW | antigravity-builder | phase-1/1.3 | 2026-10-31 13:59 | antigravity | 1.2 | src-tauri/src/stt/filters/ |
 | 1.4 | SpeechToText trait + local adapter | TODO |  |  |  | claude | 1.2, 1.3 | src-tauri/src/stt/mod.rs |
