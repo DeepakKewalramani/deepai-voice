@@ -52,8 +52,9 @@ html.overlay-view #root {
   left: 50%;
   translate: -50% 0;
   --r: 20px;
-  --w: 196px;
-  --h: var(--ov-notch);
+  /* Wider and taller than the hardware notch so the idle pill stays visible. */
+  --w: 232px;
+  --h: 46px;
 }
 .ov[data-pos="top"][data-mode="listening"] .ov-pill {
   --w: 252px;
@@ -226,7 +227,8 @@ html.overlay-view #root {
   background: rgba(255, 255, 255, 0.35);
 }
 .ov[data-pos="top"] .ov-idle-dot {
-  display: none;
+  background: rgba(94, 240, 196, 0.75);
+  box-shadow: 0 0 6px rgba(94, 240, 196, 0.5);
 }
 
 /* Listening: live dot + waveform. */
