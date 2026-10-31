@@ -28,6 +28,7 @@ regex = "1"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
 cpal = "0.18.2"
 rubato = "5.0.1"
+arboard = "3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -40,3 +41,8 @@ strip = true
 
 [dev-dependencies]
 hound = "3.5.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }
+block2 = "0.6.2"

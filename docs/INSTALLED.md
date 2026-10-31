@@ -52,3 +52,8 @@ Note: `npm audit` reports 11 moderate findings in dev dependencies (31 Oct 2026)
 | 31 Oct 2026 | cpal (crate, audio capture from input device) | 0.18.2 | src-tauri/target, Cargo.lock |
 | 31 Oct 2026 | rubato (crate, audio resampling to 16 kHz) | 5.0.1 | src-tauri/target, Cargo.lock |
 
+## Project dependencies (slice 2.4)
+| Date | Package | Version | Where |
+|---|---|---|---|
+| 31 Oct 2026 | arboard (crate, clipboard read/write; clipboard access only, not for audio) | 3.x | src-tauri/target, Cargo.lock |
+| 31 Oct 2026 | objc2 0.6.5, objc2-av-foundation 0.3.2, block2 0.6.2 (macOS target only; Zlib OR Apache-2.0 OR MIT; block2 is direct because the permission completion handler needs RcBlock) | real AVFoundation mic permission status and request (slice 1.1), approved by human | src-tauri/Cargo.toml, Cargo.lock |

@@ -108,14 +108,60 @@ pub enum MicPermissionStatus {
     Undetermined,
 }
 
-/// Seam for the OS microphone permission query. A real AVFoundation
-/// (`AVCaptureDevice authorizationStatusForMediaType`) provider can implement this
-/// without touching callers. Needs the objc2 family of crates, not added yet.
-pub trait MicPermissionProvider {
-    fn status(&self) -> MicPermissionStatus;
+/// Maps the raw `AVAuthorizationStatus` integer values to `MicPermissionStatus`.
+/// 0 NotDetermined, 1 Restricted, 2 Denied, 3 Authorized. Unknown values are Denied.
+pub fn map_av_authorization_status(raw: isize) -> MicPermissionStatus {
+    match raw {
+        0 => MicPermissionStatus::Undetermined,
+        3 => MicPermissionStatus::Granted,
+        _ => MicPermissionStatus::Denied,
+    }
 }
 
-/// Fallback provider: only probes for a default input device via cpal.
+/// Seam for the OS microphone permission query and request.
+pub trait MicPermissionProvider {
+    fn status(&self) -> MicPermissionStatus;
+
+    /// Asks the OS for microphone access. `on_done(granted)` is called once, possibly on
+    /// another thread, after the user answers (or immediately if already decided).
+    fn request(&self, on_done: Box<dyn FnOnce(bool) + Send + 'static>);
+}
+
+/// Real macOS provider backed by AVFoundation (`AVCaptureDevice`).
+#[cfg(target_os = "macos")]
+pub struct AvFoundationProvider;
+
+#[cfg(target_os = "macos")]
+impl MicPermissionProvider for AvFoundationProvider {
+    fn status(&self) -> MicPermissionStatus {
+        use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeAudio};
+        // SAFETY: AVMediaTypeAudio is a constant NSString exported by AVFoundation.
+        let media_type = unsafe { AVMediaTypeAudio }.expect("AVMediaTypeAudio is available");
+        let raw = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+        map_av_authorization_status(raw.0)
+    }
+
+    fn request(&self, on_done: Box<dyn FnOnce(bool) + Send + 'static>) {
+        use block2::RcBlock;
+        use objc2::runtime::Bool;
+        use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeAudio};
+        use std::sync::Mutex;
+
+        let media_type = unsafe { AVMediaTypeAudio }.expect("AVMediaTypeAudio is available");
+        // The handler is an Fn block, so the FnOnce is parked in a Mutex<Option<_>>.
+        let slot = Mutex::new(Some(on_done));
+        let handler = RcBlock::new(move |granted: Bool| {
+            if let Some(cb) = slot.lock().ok().and_then(|mut g| g.take()) {
+                cb(granted.as_bool());
+            }
+        });
+        unsafe {
+            AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &handler);
+        }
+    }
+}
+
+/// Fallback provider for non-macOS: only probes for a default input device via cpal.
 /// It cannot tell Denied from Undetermined, so a device present reports Granted
 /// and a missing device reports Denied. This is NOT the real OS permission state.
 pub struct CpalDeviceProbe;
@@ -127,6 +173,10 @@ impl MicPermissionProvider for CpalDeviceProbe {
             None => MicPermissionStatus::Denied,
         }
     }
+
+    fn request(&self, on_done: Box<dyn FnOnce(bool) + Send + 'static>) {
+        on_done(self.status() == MicPermissionStatus::Granted);
+    }
 }
 
 /// Checks microphone permission using the given provider.
@@ -136,9 +186,28 @@ pub fn check_microphone_permission_with(
     provider.status()
 }
 
-/// Checks microphone availability / permission with the default (device probe) provider.
+/// Requests microphone permission using the given provider.
+pub fn request_microphone_permission_with(
+    provider: &dyn MicPermissionProvider,
+    on_done: Box<dyn FnOnce(bool) + Send + 'static>,
+) {
+    provider.request(on_done)
+}
+
+/// Checks microphone permission with the platform provider (AVFoundation on macOS).
 pub fn check_microphone_permission() -> MicPermissionStatus {
+    #[cfg(target_os = "macos")]
+    return check_microphone_permission_with(&AvFoundationProvider);
+    #[cfg(not(target_os = "macos"))]
     check_microphone_permission_with(&CpalDeviceProbe)
+}
+
+/// Requests microphone permission with the platform provider.
+pub fn request_microphone_permission(on_done: Box<dyn FnOnce(bool) + Send + 'static>) {
+    #[cfg(target_os = "macos")]
+    return request_microphone_permission_with(&AvFoundationProvider, on_done);
+    #[cfg(not(target_os = "macos"))]
+    request_microphone_permission_with(&CpalDeviceProbe, on_done)
 }
 
 /// Event emitted during live recording for UI visualization.

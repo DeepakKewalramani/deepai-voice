@@ -221,6 +221,9 @@ fn test_permission_provider_seam() {
         fn status(&self) -> MicPermissionStatus {
             self.0
         }
+        fn request(&self, on_done: Box<dyn FnOnce(bool) + Send + 'static>) {
+            on_done(self.0 == MicPermissionStatus::Granted);
+        }
     }
     for st in [
         MicPermissionStatus::Granted,
@@ -229,4 +232,35 @@ fn test_permission_provider_seam() {
     ] {
         assert_eq!(check_microphone_permission_with(&Fake(st)), st);
     }
+}
+
+#[test]
+fn test_av_status_mapping() {
+    use deepai_voice_lib::audio::map_av_authorization_status as m;
+    assert_eq!(m(0), MicPermissionStatus::Undetermined);
+    assert_eq!(m(1), MicPermissionStatus::Denied); // Restricted
+    assert_eq!(m(2), MicPermissionStatus::Denied);
+    assert_eq!(m(3), MicPermissionStatus::Granted);
+    assert_eq!(m(99), MicPermissionStatus::Denied);
+}
+
+#[test]
+fn test_permission_request_through_seam() {
+    use deepai_voice_lib::audio::request_microphone_permission_with;
+    struct Fake(MicPermissionStatus);
+    impl MicPermissionProvider for Fake {
+        fn status(&self) -> MicPermissionStatus {
+            self.0
+        }
+        fn request(&self, on_done: Box<dyn FnOnce(bool) + Send + 'static>) {
+            on_done(self.0 == MicPermissionStatus::Granted);
+        }
+    }
+    let got = Arc::new(Mutex::new(None));
+    let g = got.clone();
+    request_microphone_permission_with(
+        &Fake(MicPermissionStatus::Granted),
+        Box::new(move |ok| *g.lock().unwrap() = Some(ok)),
+    );
+    assert_eq!(*got.lock().unwrap(), Some(true));
 }
