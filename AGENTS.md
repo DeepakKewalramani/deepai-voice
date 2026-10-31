@@ -46,3 +46,9 @@ Checks (must pass before every PR). `npm run check` runs these, in this order, a
 Pre-merge release check (not in `check`, slow): `npm run tauri build -- --debug`, bundle at `src-tauri/target/debug/bundle/macos/DeepAI Voice.app`, then launch it.
 
 Not a check: `npm install` (setup), `npm run tauri dev` (dev run with hot reload).
+
+## 6. PR title and description format
+- Title: `Phase <n>: <what the user gets>` for phase PRs, or `<slice id>: <what it does>` for single slices. Plain words, no file names, no "fix stuff", no "WIP".
+  Examples: `Phase 0: App scaffold, project checks and coordination tools`, `1.2: Local Whisper speech-to-text`.
+- Description: use `.github/pull_request_template.md` exactly (Summary, Slices, Changes, How it was tested with real results, Review, Not verified). Write it once from verified facts; update only when new slices land. No claims without a command result. No "Generated with" line.
+- Commits: `Slice <id>: <what it does>` or a short imperative sentence; body explains why when not obvious.
