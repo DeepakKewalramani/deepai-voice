@@ -49,6 +49,12 @@ pub struct Provider {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_ref: Option<String>,
+    /// Display name, set for custom providers (slice 2.14). Optional, additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// How the key is sent, e.g. `bearer` or `header:<name>` (slice 2.14). Optional, additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_style: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -114,6 +120,8 @@ impl Default for Settings {
                 model: "base.en".into(),
                 base_url: None,
                 key_ref: None,
+                name: None,
+                auth_style: None,
             }],
             chains: Chains { stt: vec!["whisper-local".into()], llm: vec![], tts: vec![] },
             styles: vec![Style {

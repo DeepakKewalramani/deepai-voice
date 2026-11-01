@@ -127,6 +127,8 @@ fn key_never_in_settings_file() {
         model: "claude-haiku-5-5".into(),
         base_url: None,
         key_ref: Some("anthropic".into()),
+        name: None,
+        auth_style: None,
     });
     save(&path, &s, false).unwrap();
     let text = fs::read_to_string(&path).unwrap();

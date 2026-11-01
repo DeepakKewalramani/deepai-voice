@@ -1,0 +1,89 @@
+{
+  "baseUrl": {
+    "valid": [
+      ["https://api.example.com/v1", "https://api.example.com/v1"],
+      ["https://api.example.com/v1/", "https://api.example.com/v1"],
+      ["HTTPS://API.Example.com/v1", "https://api.example.com/v1"],
+      ["https://api.example.com", "https://api.example.com"],
+      [
+        "https://api.example.com:8443/openai/v1",
+        "https://api.example.com:8443/openai/v1"
+      ],
+      ["http://localhost:11434/v1", "http://localhost:11434/v1"],
+      ["http://127.0.0.1:8080/v1/", "http://127.0.0.1:8080/v1"],
+      ["http://[::1]:11434/v1", "http://[::1]:11434/v1"],
+      ["https://[2001:db8::1]/v1", "https://[2001:db8::1]/v1"]
+    ],
+    "invalid": [
+      "",
+      "api.example.com/v1",
+      "ftp://api.example.com",
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+      "data:text/plain,hi",
+      "http://api.example.com/v1",
+      "http://192.168.1.10/v1",
+      "http://localhost.evil.com/v1",
+      "https://user:pass@api.example.com/v1",
+      "https://user@api.example.com",
+      "https://api.example.com/v1?key=abc",
+      "https://api.example.com/v1#frag",
+      "https://api.example.com/v1?",
+      "https://api example.com/v1",
+      "https://api.example.com/v 1",
+      "https://",
+      "https:///v1",
+      "https://api.example.com:0/v1",
+      "https://api.example.com:99999/v1",
+      "https://api.example.com:abc/v1",
+      "https://[::1/v1",
+      "https://api.example.com\\v1",
+      "https://api.exa\tmple.com"
+    ]
+  },
+  "name": {
+    "valid": [
+      "My server",
+      "A",
+      "Ollama on my Mac",
+      "1234567890123456789012345678901234567890"
+    ],
+    "invalid": [
+      "",
+      "   ",
+      "12345678901234567890123456789012345678901",
+      "bad\nname"
+    ]
+  },
+  "model": {
+    "valid": ["llama3.2", "gpt-5-nano", "openai/gpt-5.2", "saaras:v3", "m"],
+    "invalid": [
+      "",
+      "two words",
+      "tab\tmodel",
+      "line\nbreak",
+      "123456789012345678901234567890123456789012345678901234567890123456789012345678901"
+    ]
+  },
+  "headerName": {
+    "valid": [
+      "X-Api-Key",
+      "api-subscription-key",
+      "Api-Subscription-Key",
+      "X-API-Key-ID",
+      "xi-api-key",
+      "Authorization",
+      "X_Custom.Key"
+    ],
+    "invalid": [
+      "",
+      "X Api Key",
+      "X-Key:",
+      "X-Key\r\nEvil: 1",
+      "Host",
+      "content-length",
+      "X(Key)",
+      "Ключ"
+    ]
+  }
+}

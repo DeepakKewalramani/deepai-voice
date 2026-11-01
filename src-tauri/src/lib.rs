@@ -8,6 +8,7 @@ pub mod overlay;
 pub mod overlay_drag;
 pub mod paste;
 pub mod permissions;
+pub mod providers;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
@@ -80,7 +81,15 @@ pub fn run() {
             permissions::open_permission_pane,
             permissions::request_permission,
             autostart::autostart_status,
-            autostart::set_autostart
+            autostart::set_autostart,
+            providers::commands::provider_catalog,
+            providers::commands::providers_status,
+            providers::commands::connect_provider,
+            providers::commands::disconnect_provider,
+            providers::commands::save_custom_provider,
+            providers::commands::delete_custom_provider,
+            providers::commands::open_provider_docs,
+            providers::commands::test_provider
         ])
         .setup(move |app| {
             // First launch of the installed app turns on launch at login once.

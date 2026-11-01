@@ -6,12 +6,12 @@ import {
   AboutPanel,
   GeneralPanel,
   PrivacyPanel,
-  ProvidersPanel,
   ShortcutsPanel,
   StylesPanel,
 } from "./Panels";
 import { PermissionsPanel } from "./PermissionsPanel";
 import { LaunchAtLogin } from "./LaunchAtLogin";
+import { ProvidersHub } from "./providers";
 
 export interface SettingsShellProps {
   initialSettings?: Settings;
@@ -153,14 +153,7 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
         {active === "general" && <GeneralPanel {...common} />}
         {active === "permissions" && <PermissionsPanel />}
         {active === "providers" && (
-          <ProvidersPanel
-            {...common}
-            keyDrafts={state.keyDrafts}
-            keyHints={state.keyHints}
-            onKeyChange={(providerId, value) =>
-              dispatch({ type: "editKey", providerId, value })
-            }
-          />
+          <ProvidersHub settingsProviders={state.settings.providers} />
         )}
         {active === "shortcuts" && <ShortcutsPanel {...common} />}
         {active === "styles" && <StylesPanel {...common} />}
