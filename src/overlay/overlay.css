@@ -1,11 +1,14 @@
 /* DeepAI sine capsule. The window is a transparent, click-through box,
-   144x44 on the top and bottom anchors and 44x144 on the left and right ones
+   112x56 on the top and bottom anchors and 56x112 on the left and right ones
    (see src-tauri/src/overlay.rs `window_size_for`); only the capsule is
-   painted. Idle is a plain empty capsule; listening shows one gradient sine
-   line (drawn by Overlay.tsx); thinking is a flat shimmering line; error a
-   short red line. Sizes come from state.ts `capsuleSize` as --w and --h. On
-   the left and right anchors the capsule is turned 90 degrees so it stands
-   upright; the wave turns with it. */
+   painted. Idle is a tiny, thin, half see-through capsule; listening shows
+   one gradient sine line (drawn by Overlay.tsx); thinking is a flat
+   shimmering line; error a short red line. With the cursor over it
+   (`data-hover`, sent by Rust) it springs open into a graphite glass
+   control capsule with two round buttons, Mic and Open. Sizes come from
+   state.ts as --w and --h. On the left and right anchors the capsule is
+   turned 90 degrees so it stands upright; the wave turns with it and the
+   button glyphs turn back. */
 
 html.overlay-view,
 html.overlay-view body,
@@ -19,6 +22,16 @@ html.overlay-view #root {
 .ov {
   --ov-body: #0e0f12;
   --ov-rim: rgba(255, 255, 255, 0.08);
+  --ov-idle-body: rgba(40, 42, 48, 0.55);
+  --ov-idle-rim: rgba(255, 255, 255, 0.26);
+  --ov-glass-top: rgba(46, 48, 56, 0.9);
+  --ov-glass-bottom: rgba(16, 17, 21, 0.92);
+  --ov-glass-rim: rgba(255, 255, 255, 0.14);
+  --ov-btn: rgba(255, 255, 255, 0.07);
+  --ov-btn-rim: rgba(255, 255, 255, 0.1);
+  --ov-glyph: #ededf2;
+  --ov-orange: #ff8a4c;
+  --ov-violet: #b86bff;
   --ov-red: #ff6b66;
   --ov-spring: cubic-bezier(0.34, 1.36, 0.5, 1);
   /* Gap between the capsule and the window edge it is parked against
@@ -67,12 +80,117 @@ html.overlay-view #root {
   overflow: hidden;
   animation: ov-enter 420ms var(--ov-spring) both;
   transition:
-    width 460ms var(--ov-spring),
-    height 360ms var(--ov-spring),
+    width 320ms var(--ov-spring),
+    height 280ms var(--ov-spring),
     rotate 200ms ease-out,
     scale 180ms ease,
+    background-color 200ms ease,
     box-shadow 180ms ease,
     border-color 240ms ease;
+}
+
+/* Idle: tiny, thin and half see-through, so it is easy to ignore. */
+.ov[data-mode="idle"]:not([data-hover]) .ov-pill {
+  background: var(--ov-idle-body);
+  border-color: var(--ov-idle-rim);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+
+/* ---- Hover controls ------------------------------------------------------ */
+
+/* Springs open fast; closing (attribute removed) uses the calmer default. */
+.ov[data-hover] .ov-pill {
+  background: linear-gradient(
+    180deg,
+    var(--ov-glass-top),
+    var(--ov-glass-bottom)
+  );
+  border-color: var(--ov-glass-rim);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 10px 24px -8px rgba(0, 0, 0, 0.65),
+    0 2px 5px rgba(0, 0, 0, 0.3);
+  transition-duration: 180ms, 180ms, 200ms, 180ms, 180ms, 180ms, 180ms;
+}
+
+.ov-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px; /* overlay.rs BUTTON_GAP */
+  animation: ov-open 180ms var(--ov-spring) both;
+}
+@keyframes ov-open {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ov-btn {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 28px; /* overlay.rs BUTTON_SIZE */
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--ov-btn-rim);
+  background: var(--ov-btn);
+  color: var(--ov-glyph);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+.ov-glyph {
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ov-logo {
+  stroke: url(#ov-logo-grad);
+  stroke-width: 2;
+}
+/* Upright capsule: turn the glyphs back so they read normally. */
+.ov[data-orient="vertical"] .ov-glyph {
+  rotate: -90deg;
+}
+
+/* Listening: the mic button carries our orange to violet ring and breathes
+   gently (the click stops dictation). */
+.ov[data-mode="listening"] .ov-btn-mic {
+  border-color: transparent;
+  background:
+    linear-gradient(#1b1c22, #1b1c22) padding-box,
+    linear-gradient(135deg, var(--ov-orange), var(--ov-violet)) border-box;
+}
+.ov[data-mode="listening"] .ov-btn-mic::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(255, 138, 76, 0.35),
+    0 0 8px rgba(184, 107, 255, 0.45);
+  animation: ov-breathe 1.6s ease-in-out infinite;
+}
+@keyframes ov-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 
 @keyframes ov-enter {
@@ -122,7 +240,7 @@ html.overlay-view #root {
 .ov-line {
   fill: none;
   stroke: url(#ov-sine-grad);
-  stroke-width: 1.75;
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -169,12 +287,19 @@ html.overlay-view #root {
 
 @media (prefers-reduced-motion: reduce) {
   .ov-pill,
+  .ov[data-hover] .ov-pill,
   .ov[data-mode="error"] .ov-pill {
     animation: none;
     transition-duration: 1ms;
   }
   .ov-line,
-  .ov[data-mode="thinking"] .ov-line {
+  .ov[data-mode="thinking"] .ov-line,
+  .ov-controls {
     animation: none;
+  }
+  /* A steady ring instead of the breathing one. */
+  .ov[data-mode="listening"] .ov-btn-mic::after {
+    animation: none;
+    opacity: 0.8;
   }
 }

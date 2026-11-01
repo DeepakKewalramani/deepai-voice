@@ -26,10 +26,14 @@ use tauri::{
 /// Label of the overlay window. The frontend renders the pill for this label.
 pub const OVERLAY_WINDOW: &str = "overlay";
 /// Overlay window size in logical pixels for a horizontal capsule (top and
-/// bottom): the widest capsule (listening, 116 x 26) plus room for its soft
-/// shadow and the drag lift. Left and right use it swapped (44 x 144).
-pub const OVERLAY_WIDTH: f64 = 144.0;
-pub const OVERLAY_HEIGHT: f64 = 44.0;
+/// bottom): the largest capsule (the hover controls, 84 x 36) plus room for
+/// its soft shadow and the drag lift. Left and right use it swapped
+/// (56 x 112).
+pub const OVERLAY_WIDTH: f64 = 112.0;
+pub const OVERLAY_HEIGHT: f64 = 56.0;
+/// Window size before 2.3c. Old free placements in `overlay.json` were laid
+/// out with it, so `normalise_placement` keeps using it.
+const LEGACY_WINDOW: (f64, f64) = (144.0, 44.0);
 /// Square window used only while the snap animation turns the capsule
 /// between horizontal and upright, so no angle of the turn is clipped.
 pub const TURN_WINDOW: (f64, f64) = (OVERLAY_WIDTH, OVERLAY_WIDTH);
@@ -44,13 +48,32 @@ pub const TOP_OFFSET: f64 = 32.0;
 pub const CAPSULE_INSET: f64 = 8.0;
 /// Capsule size used for hit testing until the frontend reports one: the
 /// idle capsule (overlay state.ts `capsuleSize`).
-pub const DEFAULT_CAPSULE: (f64, f64) = (76.0, 24.0);
+pub const DEFAULT_CAPSULE: (f64, f64) = (36.0, 8.0);
+/// The control capsule shown while the cursor is over the pill (state.ts
+/// `HOVER_SIZE`), unrotated. Upright on the left and right anchors.
+pub const HOVER_CAPSULE: (f64, f64) = (84.0, 36.0);
+/// Side of each round button in the control capsule (state.ts `BUTTON_SIZE`).
+pub const BUTTON_SIZE: f64 = 28.0;
+/// Gap between the two buttons (overlay.css `.ov-controls` gap).
+pub const BUTTON_GAP: f64 = 8.0;
+/// How far around the capsule the cursor still counts as over it.
+pub const HOVER_PAD: f64 = 8.0;
 /// Event sent to the overlay when its position changes (payload: "top" etc).
 pub const POSITION_EVENT: &str = "overlay-position";
 /// File in the app data dir that stores the chosen position.
 pub const SETTINGS_FILE: &str = "overlay.json";
 /// Tray item id that puts the pill back at the top, below the notch.
 pub const RESET_MENU_ID: &str = "overlay-reset";
+
+/// The two round buttons of the control capsule, in layout order (left to
+/// right, or top to bottom when upright).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayButton {
+    /// Start or stop dictation.
+    Mic,
+    /// Open the DeepAI Voice window.
+    Open,
+}
 
 /// Screen edge the pill is parked on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -202,6 +225,16 @@ impl Rect {
     pub fn center(self) -> (f64, f64) {
         (self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
+
+    /// The rect grown by `pad` on every side.
+    pub fn padded(self, pad: f64) -> Rect {
+        Rect {
+            x: self.x - pad,
+            y: self.y - pad,
+            w: self.w + 2.0 * pad,
+            h: self.h + 2.0 * pad,
+        }
+    }
 }
 
 /// Logical top-left of a `win_w` x `win_h` window placed at `pos` on `screen`.
@@ -263,7 +296,7 @@ pub fn normalise_placement(placement: Placement, screen: Screen) -> Position {
     if (clamp_offset(placement.offset) - 0.5).abs() < 1e-9 {
         return placement.edge;
     }
-    let (w, h) = (OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    let (w, h) = LEGACY_WINDOW;
     let (x, y) = placement_origin(screen, w, h, placement);
     nearest_anchor((x + w / 2.0, y + h / 2.0), screen)
 }
@@ -339,6 +372,57 @@ pub fn capsule_rect_in(
     Rect { x, y, w, h }
 }
 
+/// The control capsule shown on hover, for the window at `window` on `edge`
+/// (upright on the left and right).
+pub fn hover_rect(window: (f64, f64), edge: Position) -> Rect {
+    capsule_rect(window, edge, Some(HOVER_CAPSULE))
+}
+
+/// The two button rects inside the control capsule `capsule`: a row on
+/// top and bottom, a column on the left and right. Mic comes first (left,
+/// or top when upright), centred with `BUTTON_GAP` between them, as
+/// overlay.css lays them out.
+pub fn button_rects(capsule: Rect, edge: Position) -> [(OverlayButton, Rect); 2] {
+    let (cx, cy) = capsule.center();
+    let half = BUTTON_SIZE / 2.0;
+    let step = (BUTTON_SIZE + BUTTON_GAP) / 2.0;
+    let at = |d: f64| {
+        let (x, y) = if edge.is_vertical() {
+            (cx - half, cy + d - half)
+        } else {
+            (cx + d - half, cy - half)
+        };
+        Rect {
+            x,
+            y,
+            w: BUTTON_SIZE,
+            h: BUTTON_SIZE,
+        }
+    };
+    [
+        (OverlayButton::Mic, at(-step)),
+        (OverlayButton::Open, at(step)),
+    ]
+}
+
+/// Where the cursor counts as over the pill: the visible capsule plus
+/// `HOVER_PAD`. While closed that is the small capsule (`base`, the size the
+/// frontend reported, idle when `None`); while open it is the control
+/// capsule, so the cursor can move onto the buttons without it closing.
+pub fn hover_zone(
+    window: (f64, f64),
+    edge: Position,
+    base: Option<(f64, f64)>,
+    open: bool,
+) -> Rect {
+    let r = if open {
+        hover_rect(window, edge)
+    } else {
+        capsule_rect(window, edge, base)
+    };
+    r.padded(HOVER_PAD)
+}
+
 /// Origin of the square turn window that shows a capsule laid out for
 /// `edge` with its centre at `center`. Used by the snap animation: the
 /// capsule keeps its place when the window switches to the turn square,
@@ -410,7 +494,9 @@ pub fn load_placement(path: &Path) -> Placement {
     }
 }
 
-/// Writes the placement, creating the parent dir if needed.
+/// Writes the placement, creating the parent dir if needed. The JSON goes
+/// to a temp file next to it that is then renamed over the old file, so a
+/// crash mid-write never leaves a half-written `overlay.json`.
 pub fn save_placement(path: &Path, placement: Placement) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -421,7 +507,18 @@ pub fn save_placement(path: &Path, placement: Placement) -> std::io::Result<()> 
         offset: Some(clamp_offset(placement.offset)),
     };
     let json = serde_json::to_string(&stored).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
+    let tmp = temp_path(path);
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// The temp file `save_placement` writes first: `overlay.json.tmp`.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    path.with_file_name(name)
 }
 
 /// Reads the saved edge. Missing or invalid file means Top.
@@ -631,10 +728,10 @@ mod tests {
 
     #[test]
     fn top_is_centred_below_the_notch_band() {
-        // 3024 / 2 = 1512 logical, (1512 - 144) / 2 = 684.
+        // 3024 / 2 = 1512 logical, (1512 - 112) / 2 = 700 (2.3c window).
         assert_eq!(
             overlay_origin(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, Position::Top),
-            (684.0, 32.0)
+            (700.0, 32.0)
         );
     }
 
@@ -644,13 +741,13 @@ mod tests {
         let (w, h) = (OVERLAY_WIDTH, OVERLAY_HEIGHT);
         assert_eq!(
             overlay_origin(RETINA, w, h, Position::Bottom),
-            (684.0, 982.0 - 44.0 - 12.0)
+            (700.0, 982.0 - 56.0 - 12.0)
         );
-        let mid_y = (982.0 - 44.0) / 2.0;
+        let mid_y = (982.0 - 56.0) / 2.0;
         assert_eq!(overlay_origin(RETINA, w, h, Position::Left), (12.0, mid_y));
         assert_eq!(
             overlay_origin(RETINA, w, h, Position::Right),
-            (1512.0 - 144.0 - 12.0, mid_y)
+            (1512.0 - 112.0 - 12.0, mid_y)
         );
     }
 
@@ -665,7 +762,7 @@ mod tests {
         };
         assert_eq!(
             overlay_origin(screen, OVERLAY_WIDTH, OVERLAY_HEIGHT, Position::Top),
-            (1920.0 + 888.0, -100.0 + 32.0)
+            (1920.0 + 904.0, -100.0 + 32.0)
         );
     }
 
@@ -733,7 +830,7 @@ mod tests {
         );
         assert_eq!(
             placement_origin(RETINA, w, h, Placement::new(Position::Bottom, 1.0)),
-            (1512.0 - 144.0 - 12.0, 982.0 - 44.0 - 12.0)
+            (1512.0 - 112.0 - 12.0, 982.0 - 56.0 - 12.0)
         );
         // Left and right: y runs from below the notch band to the same gap
         // above the bottom.
@@ -743,7 +840,7 @@ mod tests {
         );
         assert_eq!(
             placement_origin(RETINA, w, h, Placement::new(Position::Right, 1.0)),
-            (1512.0 - 144.0 - 12.0, 982.0 - 44.0 - 32.0)
+            (1512.0 - 112.0 - 12.0, 982.0 - 56.0 - 32.0)
         );
     }
 
@@ -803,34 +900,36 @@ mod tests {
     #[test]
     fn capsule_rect_follows_the_css_layout() {
         let o = (100.0, 200.0);
-        let size = Some((116.0, 26.0));
-        // Top and bottom: 144 x 44 window, centred across, 8 px inset.
+        // 2.3c: the compact listening capsule (72 x 20) in the 112 x 56
+        // window.
+        let size = Some((72.0, 20.0));
+        // Top and bottom: 112 x 56 window, centred across, 8 px inset.
         assert_eq!(
             capsule_rect(o, Position::Top, size),
             Rect {
-                x: 100.0 + 14.0,
+                x: 100.0 + 20.0,
                 y: 208.0,
-                w: 116.0,
-                h: 26.0
+                w: 72.0,
+                h: 20.0
             }
         );
         assert_eq!(
             capsule_rect(o, Position::Bottom, size),
             Rect {
-                x: 114.0,
-                y: 200.0 + 44.0 - 8.0 - 26.0,
-                w: 116.0,
-                h: 26.0
+                x: 120.0,
+                y: 200.0 + 56.0 - 8.0 - 20.0,
+                w: 72.0,
+                h: 20.0
             }
         );
         // Left and right (changed by the four-anchor work): the window is
-        // 44 x 144 and the capsule is turned upright, so width and height
+        // 56 x 112 and the capsule is turned upright, so width and height
         // swap and it is centred in the window.
         let upright = Rect {
-            x: 100.0 + (44.0 - 26.0) / 2.0,
-            y: 200.0 + (144.0 - 116.0) / 2.0,
-            w: 26.0,
-            h: 116.0,
+            x: 100.0 + (56.0 - 20.0) / 2.0,
+            y: 200.0 + (112.0 - 72.0) / 2.0,
+            w: 20.0,
+            h: 72.0,
         };
         assert_eq!(capsule_rect(o, Position::Left, size), upright);
         assert_eq!(capsule_rect(o, Position::Right, size), upright);
@@ -842,7 +941,12 @@ mod tests {
         assert_eq!((r.w, r.h), (DEFAULT_CAPSULE.1, DEFAULT_CAPSULE.0));
         for p in Position::ALL {
             let (ww, wh) = window_size_for(p);
-            for size in [None, Some((116.0, 26.0)), Some((9000.0, 9000.0))] {
+            for size in [
+                None,
+                Some((72.0, 20.0)),
+                Some(HOVER_CAPSULE),
+                Some((9000.0, 9000.0)),
+            ] {
                 let r = capsule_rect((0.0, 0.0), p, size);
                 assert!(r.x >= 0.0 && r.y >= 0.0, "{p:?} {r:?}");
                 assert!(r.x + r.w <= ww && r.y + r.h <= wh, "{p:?} {r:?}");
@@ -864,10 +968,10 @@ mod tests {
 
     #[test]
     fn window_size_swaps_on_the_left_and_right() {
-        assert_eq!(window_size_for(Position::Top), (144.0, 44.0));
-        assert_eq!(window_size_for(Position::Bottom), (144.0, 44.0));
-        assert_eq!(window_size_for(Position::Left), (44.0, 144.0));
-        assert_eq!(window_size_for(Position::Right), (44.0, 144.0));
+        assert_eq!(window_size_for(Position::Top), (112.0, 56.0));
+        assert_eq!(window_size_for(Position::Bottom), (112.0, 56.0));
+        assert_eq!(window_size_for(Position::Left), (56.0, 112.0));
+        assert_eq!(window_size_for(Position::Right), (56.0, 112.0));
         assert!(Position::Left.is_vertical() && Position::Right.is_vertical());
         assert!(!Position::Top.is_vertical() && !Position::Bottom.is_vertical());
     }
@@ -878,37 +982,37 @@ mod tests {
         assert_eq!(
             a(Position::Top),
             Rect {
-                x: 684.0,
+                x: 700.0,
                 y: 32.0,
-                w: 144.0,
-                h: 44.0
+                w: 112.0,
+                h: 56.0
             }
         );
         assert_eq!(
             a(Position::Bottom),
             Rect {
-                x: 684.0,
-                y: 982.0 - 44.0 - 12.0,
-                w: 144.0,
-                h: 44.0
+                x: 700.0,
+                y: 982.0 - 56.0 - 12.0,
+                w: 112.0,
+                h: 56.0
             }
         );
         assert_eq!(
             a(Position::Left),
             Rect {
                 x: 12.0,
-                y: (982.0 - 144.0) / 2.0,
-                w: 44.0,
-                h: 144.0
+                y: (982.0 - 112.0) / 2.0,
+                w: 56.0,
+                h: 112.0
             }
         );
         assert_eq!(
             a(Position::Right),
             Rect {
-                x: 1512.0 - 44.0 - 12.0,
-                y: (982.0 - 144.0) / 2.0,
-                w: 44.0,
-                h: 144.0
+                x: 1512.0 - 56.0 - 12.0,
+                y: (982.0 - 112.0) / 2.0,
+                w: 56.0,
+                h: 112.0
             }
         );
         // The top capsule clears the notch band: its top is 40 px down.
@@ -964,18 +1068,20 @@ mod tests {
 
     #[test]
     fn turn_window_keeps_the_capsule_in_place() {
-        let size = Some((116.0, 26.0));
-        for p in Position::ALL {
-            let anchor = anchor_window_rect(p, RETINA, window_size_for(p));
-            let fin = capsule_rect((anchor.x, anchor.y), p, size);
-            let o = turn_origin(fin.center(), p, size);
-            // Same capsule rect in the square window as in the final one,
-            // so shrinking the window at the end does not move it.
-            assert_eq!(capsule_rect_in(o, TURN_WINDOW, p, size), fin, "{p:?}");
-            // And it fits the square at every angle of the turn.
-            let diag = (116.0f64.powi(2) + 26.0f64.powi(2)).sqrt();
-            assert!(diag <= TURN_WINDOW.0, "{diag}");
+        // 2.3c sizes: the compact listening capsule and the hover controls.
+        for size in [Some((72.0, 20.0)), Some(HOVER_CAPSULE), None] {
+            for p in Position::ALL {
+                let anchor = anchor_window_rect(p, RETINA, window_size_for(p));
+                let fin = capsule_rect((anchor.x, anchor.y), p, size);
+                let o = turn_origin(fin.center(), p, size);
+                // Same capsule rect in the square window as in the final
+                // one, so shrinking the window at the end does not move it.
+                assert_eq!(capsule_rect_in(o, TURN_WINDOW, p, size), fin, "{p:?}");
+            }
         }
+        // The largest capsule fits the square at every angle of the turn.
+        let diag = (HOVER_CAPSULE.0.powi(2) + HOVER_CAPSULE.1.powi(2)).sqrt();
+        assert!(diag <= TURN_WINDOW.0, "{diag}");
     }
 
     #[test]
@@ -1039,7 +1145,7 @@ mod tests {
         let p = snap_placement(ext, (1512.0 + 30.0, 540.0));
         assert_eq!(p, Placement::preset(Position::Left));
         let r = anchor_window_rect(Position::Left, ext, window_size_for(Position::Left));
-        assert_eq!((r.x, r.y), (1512.0 + 12.0, (1080.0 - 144.0) / 2.0));
+        assert_eq!((r.x, r.y), (1512.0 + 12.0, (1080.0 - 112.0) / 2.0));
     }
 
     // ---- Monitors ------------------------------------------------------------
@@ -1067,7 +1173,7 @@ mod tests {
         assert_eq!(clamp_to_screen(RETINA, w, h, (-40.0, -9.0)), (0.0, 0.0));
         assert_eq!(
             clamp_to_screen(RETINA, w, h, (1500.0, 990.0)),
-            (1512.0 - 144.0, 982.0 - 44.0)
+            (1512.0 - 112.0, 982.0 - 56.0)
         );
         assert_eq!(
             clamp_to_screen(RETINA, w, h, (300.0, 400.0)),
@@ -1078,13 +1184,165 @@ mod tests {
     #[test]
     fn capsule_size_payload_is_parsed_and_checked() {
         assert_eq!(
-            parse_capsule_size(r#"{"width":116,"height":26}"#),
-            Some((116.0, 26.0))
+            parse_capsule_size(r#"{"width":72,"height":20}"#),
+            Some((72.0, 20.0))
         );
         assert_eq!(parse_capsule_size(r#"{"width":0,"height":26}"#), None);
         assert_eq!(parse_capsule_size(r#"{"width":500,"height":26}"#), None);
         assert_eq!(parse_capsule_size(r#"{"width":116,"height":60}"#), None);
         assert_eq!(parse_capsule_size(r#"{"width":92}"#), None);
         assert_eq!(parse_capsule_size("nope"), None);
+    }
+    // ---- 2.3c: tiny idle capsule, hover controls -----------------------------
+
+    #[test]
+    fn idle_is_tiny_and_the_window_holds_the_hover_controls_with_the_lift() {
+        assert_eq!(DEFAULT_CAPSULE, (36.0, 8.0));
+        assert_eq!(HOVER_CAPSULE, (84.0, 36.0));
+        // 8 px inset each side and the 4% drag lift.
+        assert!(HOVER_CAPSULE.0 * 1.04 + 2.0 * CAPSULE_INSET <= OVERLAY_WIDTH);
+        assert!(HOVER_CAPSULE.1 * 1.04 + 2.0 * CAPSULE_INSET <= OVERLAY_HEIGHT);
+        let r = capsule_rect((0.0, 0.0), Position::Right, None);
+        assert_eq!((r.w, r.h), (8.0, 36.0));
+    }
+
+    #[test]
+    fn rect_padded_grows_every_side() {
+        let r = Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 36.0,
+            h: 8.0,
+        };
+        assert_eq!(
+            r.padded(8.0),
+            Rect {
+                x: 2.0,
+                y: 12.0,
+                w: 52.0,
+                h: 24.0
+            }
+        );
+    }
+
+    #[test]
+    fn hover_rect_and_buttons_on_the_top_anchor() {
+        let top = anchor_window_rect(Position::Top, RETINA, window_size_for(Position::Top));
+        let h = hover_rect((top.x, top.y), Position::Top);
+        assert_eq!(
+            h,
+            Rect {
+                x: 700.0 + 14.0,
+                y: 40.0,
+                w: 84.0,
+                h: 36.0
+            }
+        );
+        let [(b0, mic), (b1, open)] = button_rects(h, Position::Top);
+        assert_eq!((b0, b1), (OverlayButton::Mic, OverlayButton::Open));
+        assert_eq!(
+            mic,
+            Rect {
+                x: 714.0 + 10.0,
+                y: 44.0,
+                w: 28.0,
+                h: 28.0
+            }
+        );
+        assert_eq!(
+            open,
+            Rect {
+                x: 714.0 + 46.0,
+                y: 44.0,
+                w: 28.0,
+                h: 28.0
+            }
+        );
+    }
+
+    #[test]
+    fn hover_buttons_stack_mic_over_open_when_upright() {
+        let left = anchor_window_rect(Position::Left, RETINA, window_size_for(Position::Left));
+        let h = hover_rect((left.x, left.y), Position::Left);
+        // 36 x 84 upright, centred in the 56 x 112 window at (12, 435).
+        assert_eq!(
+            h,
+            Rect {
+                x: 22.0,
+                y: 449.0,
+                w: 36.0,
+                h: 84.0
+            }
+        );
+        let [(_, mic), (_, open)] = button_rects(h, Position::Left);
+        assert_eq!((mic.x, mic.y), (26.0, 459.0));
+        assert_eq!((open.x, open.y), (26.0, 495.0));
+    }
+
+    #[test]
+    fn buttons_sit_inside_the_hover_capsule_apart_on_every_anchor() {
+        for p in Position::ALL {
+            let win = anchor_window_rect(p, RETINA, window_size_for(p));
+            let h = hover_rect((win.x, win.y), p);
+            // The hover capsule stays inside the window.
+            assert!(h.x >= win.x && h.y >= win.y, "{p:?}");
+            assert!(
+                h.x + h.w <= win.x + win.w && h.y + h.h <= win.y + win.h,
+                "{p:?}"
+            );
+            let [(_, a), (_, b)] = button_rects(h, p);
+            for r in [a, b] {
+                assert!(
+                    h.contains(r.x, r.y) && h.contains(r.x + r.w, r.y + r.h),
+                    "{p:?}"
+                );
+            }
+            // No overlap: a press can only ever hit one button.
+            let apart = a.x + a.w < b.x || a.y + a.h < b.y;
+            assert!(apart, "{p:?} {a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn hover_zone_is_the_small_capsule_closed_and_the_controls_open() {
+        let top = anchor_window_rect(Position::Top, RETINA, window_size_for(Position::Top));
+        let o = (top.x, top.y);
+        let closed = hover_zone(o, Position::Top, None, false);
+        // Idle 36 x 8 at (738, 40), plus 8 px.
+        assert_eq!(
+            closed,
+            Rect {
+                x: 730.0,
+                y: 32.0,
+                w: 52.0,
+                h: 24.0
+            }
+        );
+        assert!(closed.contains(756.0, 34.0));
+        assert!(!closed.contains(756.0, 70.0));
+        let open = hover_zone(o, Position::Top, None, true);
+        assert_eq!(open, hover_rect(o, Position::Top).padded(HOVER_PAD));
+        // Once open, the cursor can travel down to the buttons.
+        assert!(open.contains(756.0, 70.0));
+        // Upright: the zone turns with the capsule.
+        let left = anchor_window_rect(Position::Left, RETINA, window_size_for(Position::Left));
+        let z = hover_zone((left.x, left.y), Position::Left, None, false);
+        assert_eq!((z.w, z.h), (24.0, 52.0));
+    }
+
+    #[test]
+    fn save_is_atomic_and_leaves_no_temp_file() {
+        let path = temp_file("atomic");
+        save_placement(&path, Placement::preset(Position::Left)).unwrap();
+        // A stale temp file from a crash is simply replaced.
+        std::fs::write(temp_path(&path), "half").unwrap();
+        save_placement(&path, Placement::preset(Position::Bottom)).unwrap();
+        assert_eq!(load_placement(&path), Placement::preset(Position::Bottom));
+        assert!(!temp_path(&path).exists());
+        assert_eq!(
+            temp_path(&path).file_name().unwrap().to_str(),
+            Some("overlay.json.tmp")
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

@@ -23,20 +23,22 @@ describe("Overlay", () => {
     expect(m).toContain('data-mode="idle"');
     expect(m).toContain('data-pos="top"');
     expect(m).toContain('aria-label="DeepAI Voice ready"');
-    expect(m).toContain("--w:76px");
-    expect(m).toContain("--h:24px");
-    // Nothing inside: no wave, no orb, no dots.
+    // 2.3c: tiny and thin.
+    expect(m).toContain("--w:36px");
+    expect(m).toContain("--h:8px");
+    // Nothing inside: no wave, no orb, no dots, no buttons.
     expect(m).not.toContain("<svg");
     expect(m).not.toContain("ov-orb");
     expect(m).not.toContain("ov-eq");
+    expect(m).not.toContain("<button");
     expect(visibleText(m)).toBe("");
   });
   it("shows one gradient sine line while listening", () => {
     const m = render("REC");
     expect(m).toContain('data-mode="listening"');
     expect(m).toContain('aria-label="Listening"');
-    expect(m).toContain("--w:116px");
-    expect(m).toContain("--h:26px");
+    expect(m).toContain("--w:72px");
+    expect(m).toContain("--h:20px");
     expect(m.match(/<path/g)?.length).toBe(1);
     expect(m).toContain("linearGradient");
     expect(m).toContain("#ff8a4c");
@@ -58,13 +60,13 @@ describe("Overlay", () => {
       />,
     );
     expect(m).not.toContain("hello there");
-    expect(m).toContain("--w:116px");
+    expect(m).toContain("--w:72px");
   });
   it("shows an error as a small red line with no text", () => {
     const m = render("Model missing", "left");
     expect(m).toContain('data-mode="error"');
     expect(m).toContain('data-pos="left"');
-    expect(m).toContain("--w:76px");
+    expect(m).toContain("--w:48px");
     expect(m.match(/<path/g)?.length).toBe(1);
     expect(visibleText(m)).toBe("");
     // The message stays available to assistive tech only.
@@ -76,7 +78,7 @@ describe("Overlay", () => {
       expect(m).toContain(`data-pos="${pos}"`);
       expect(m).toContain('data-orient="vertical"');
       // Same unrotated size and one wave: CSS turns the whole capsule.
-      expect(m).toContain("--w:116px");
+      expect(m).toContain("--w:72px");
       expect(m.match(/<path/g)?.length).toBe(1);
     }
     for (const pos of ["top", "bottom"] as const) {
@@ -87,5 +89,37 @@ describe("Overlay", () => {
     expect(render("")).not.toContain("data-dragging");
     const m = renderToStaticMarkup(<Overlay initialDragging />);
     expect(m).toContain('data-dragging="true"');
+  });
+  it("opens into the control capsule with a mic and an open button on hover", () => {
+    const m = renderToStaticMarkup(<Overlay initialHover />);
+    expect(m).toContain("data-hover");
+    expect(m).toContain("--w:84px");
+    expect(m).toContain("--h:36px");
+    expect(m.match(/<button/g)?.length).toBe(2);
+    expect(m).toContain('aria-label="Start dictation"');
+    expect(m).toContain('aria-label="Open DeepAI Voice"');
+    expect(m).toContain('aria-pressed="false"');
+    // Never focusable: the window must not take focus.
+    expect(m.match(/tabindex="-1"/g)?.length).toBe(2);
+    expect(m).not.toContain("ov-wave");
+    expect(visibleText(m)).toBe("");
+  });
+  it("shows a pulsing stop button while listening on hover", () => {
+    const m = renderToStaticMarkup(
+      <Overlay initialState={overlayStateFromText("REC")} initialHover />,
+    );
+    expect(m).toContain('data-mode="listening"');
+    expect(m).toContain('aria-label="Stop dictation"');
+    expect(m).toContain('aria-pressed="true"');
+    expect(m).toContain("--w:84px");
+    expect(visibleText(m)).toBe("");
+  });
+  it("keeps the unrotated control size upright: CSS turns it", () => {
+    const m = renderToStaticMarkup(
+      <Overlay initialPosition="left" initialHover />,
+    );
+    expect(m).toContain('data-orient="vertical"');
+    expect(m).toContain("--w:84px");
+    expect(m.match(/<button/g)?.length).toBe(2);
   });
 });

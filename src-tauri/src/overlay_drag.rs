@@ -13,6 +13,14 @@
 //! with a short eased move (see `overlay::nearest_anchor`, `snap_steps`),
 //! turning it upright on the left and right, and saves the anchor.
 //!
+//! Hover controls (2.3c): the worker also polls the global cursor every
+//! `HOVER_POLL_MS` and sends `overlay-hover {on}` when it comes near the
+//! small capsule (`overlay::hover_zone`); the frontend then opens the
+//! control capsule with the Mic and Open buttons. A press on a button is a
+//! click (fired on release inside it, never a drag); a press elsewhere in
+//! the control capsule drags as before. The window stays click-through and
+//! non-focusable; clicks are run in the worker, never in the tap callback.
+//!
 //! An active tap needs the Accessibility permission. Without it the tap is
 //! not installed and the check repeats every 3 s. Nothing here logs mouse
 //! coordinates.
@@ -22,13 +30,16 @@
 //! not the flipped, bottom-left Cocoa space), and so do tao's logical
 //! window and monitor positions on macOS, across monitors of any scale.
 
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager, Runtime};
 
-use crate::overlay::{self, OVERLAY_WINDOW, Placement, Position, Rect, Screen};
+use crate::hotkey::HotkeyAction;
+use crate::overlay::{self, OVERLAY_WINDOW, OverlayButton, Placement, Position, Rect, Screen};
 
 /// Movement in points before a press on the capsule becomes a drag. A plain
 /// click (less movement) is swallowed and does nothing.
@@ -47,6 +58,25 @@ pub const SNAP_MS: u64 = 150;
 /// Extra wait after the snap when the capsule turns, so the CSS turn
 /// (overlay.css `rotate 200ms`) ends before the window shrinks around it.
 pub const TURN_SETTLE_MS: u64 = 80;
+/// Event sent to the overlay window with `{on: bool}` when the cursor comes
+/// near the capsule or leaves it.
+pub const HOVER_EVENT: &str = "overlay-hover";
+/// How often the worker reads the cursor position.
+pub const HOVER_POLL_MS: u64 = 50;
+/// How long the controls stay open after the cursor leaves.
+pub const HOVER_CLOSE_MS: u64 = 400;
+/// Status event of the dictation orchestrator (payload: status text).
+const DICTATION_STATUS_EVENT: &str = "dictation-status";
+
+/// Steps, pause between steps (ms) and turn settle time (ms) of the snap
+/// animation. With reduced motion the pill jumps straight to the anchor.
+pub fn snap_plan(reduced_motion: bool) -> (usize, u64, u64) {
+    if reduced_motion {
+        (1, 0, 0)
+    } else {
+        (SNAP_STEPS, SNAP_MS / SNAP_STEPS as u64, TURN_SETTLE_MS)
+    }
+}
 
 /// Window origins for an eased (ease-out cubic) move from `from` to `to`
 /// in `steps` steps (at least one). The last step is exactly `to`.
@@ -83,6 +113,8 @@ pub enum DragAction {
     PassThrough,
     /// Swallow the event; the drag ended with the window origin here.
     Drop(f64, f64),
+    /// Swallow the event; a control button was clicked.
+    Click(OverlayButton),
 }
 
 impl DragAction {
@@ -96,7 +128,19 @@ impl DragAction {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Frame {
     pub window: (f64, f64),
+    /// The visible capsule: the small one, or the control capsule on hover.
     pub capsule: Rect,
+    /// The control buttons, only while the controls are open.
+    pub buttons: Option<[(OverlayButton, Rect); 2]>,
+}
+
+/// What a press landed on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PressTarget {
+    /// The capsule outside any button: moving drags the pill.
+    Body,
+    /// A control button (and its rect): fires on release inside it.
+    Button(OverlayButton, Rect),
 }
 
 /// Drag gesture state, fed one mouse event at a time.
@@ -105,8 +149,12 @@ pub enum DragState {
     #[default]
     Idle,
     /// Pressed on the capsule; `grab` is the press point minus the window
-    /// origin, `start` the press point.
-    Pressed { start: (f64, f64), grab: (f64, f64) },
+    /// origin, `start` the press point, `target` what was pressed.
+    Pressed {
+        start: (f64, f64),
+        grab: (f64, f64),
+        target: PressTarget,
+    },
     /// Moving; `last` is the last window origin sent.
     Dragging { grab: (f64, f64), last: (f64, f64) },
 }
@@ -124,16 +172,46 @@ impl DragState {
         match (*self, kind) {
             (DragState::Idle, MouseKind::Down) => match frame {
                 Some(f) if f.capsule.contains(px, py) => {
+                    let button = f
+                        .buttons
+                        .into_iter()
+                        .flatten()
+                        .find(|(_, r)| r.contains(px, py));
                     *self = DragState::Pressed {
                         start: point,
                         grab: (px - f.window.0, py - f.window.1),
+                        target: match button {
+                            Some((b, r)) => PressTarget::Button(b, r),
+                            None => PressTarget::Body,
+                        },
                     };
                     DragAction::Swallow
                 }
                 _ => DragAction::PassThrough,
             },
             (DragState::Idle, _) => DragAction::PassThrough,
-            (DragState::Pressed { start, grab }, MouseKind::Dragged) => {
+            (
+                DragState::Pressed {
+                    target: PressTarget::Button(..),
+                    ..
+                },
+                MouseKind::Dragged,
+            ) => DragAction::Swallow,
+            (
+                DragState::Pressed {
+                    target: PressTarget::Button(b, r),
+                    ..
+                },
+                MouseKind::Up,
+            ) => {
+                *self = DragState::Idle;
+                if r.contains(px, py) {
+                    DragAction::Click(b)
+                } else {
+                    DragAction::Swallow
+                }
+            }
+            (DragState::Pressed { start, grab, .. }, MouseKind::Dragged) => {
                 let (dx, dy) = (px - start.0, py - start.1);
                 if (dx * dx + dy * dy).sqrt() < DRAG_THRESHOLD {
                     return DragAction::Swallow;
@@ -179,6 +257,130 @@ impl DragState {
     }
 }
 
+/// Whether the hover controls are open, fed one cursor poll at a time.
+/// Opens as soon as the cursor is inside the hover zone; closes
+/// `HOVER_CLOSE_MS` after the last poll that was inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HoverTracker {
+    open: bool,
+    last_inside_ms: u64,
+}
+
+impl HoverTracker {
+    pub fn is_open(self) -> bool {
+        self.open
+    }
+
+    /// One poll at `now_ms`; returns the new state when it changed.
+    pub fn update(&mut self, inside: bool, now_ms: u64) -> Option<bool> {
+        if inside {
+            self.last_inside_ms = now_ms;
+            if !self.open {
+                self.open = true;
+                return Some(true);
+            }
+        } else if self.open && now_ms.saturating_sub(self.last_inside_ms) >= HOVER_CLOSE_MS {
+            self.open = false;
+            return Some(false);
+        }
+        None
+    }
+
+    /// Closes at once (a drag started). True when it was open.
+    pub fn close_now(&mut self) -> bool {
+        std::mem::take(&mut self.open)
+    }
+}
+
+/// The Mic button: alternate clicks start and stop dictation through the
+/// same callback the hotkeys use. A click is ignored while a recording that
+/// a key hold started is running, and any status other than "REC" (done,
+/// error, cancelled) resets the toggle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MicToggle {
+    click_recording: bool,
+    listening: bool,
+}
+
+impl MicToggle {
+    /// The action for one click, if any.
+    pub fn click(&mut self) -> Option<HotkeyAction> {
+        if self.click_recording {
+            self.click_recording = false;
+            Some(HotkeyAction::StopRecording)
+        } else if self.listening {
+            None
+        } else {
+            self.click_recording = true;
+            Some(HotkeyAction::StartRecording)
+        }
+    }
+
+    /// Follows the `dictation-status` text ("REC" while recording).
+    pub fn on_status(&mut self, text: &str) {
+        self.listening = text.trim() == "REC";
+        if !self.listening {
+            self.click_recording = false;
+        }
+    }
+}
+
+/// The dictation start/stop callback from `dictation::spawn`, shared by the
+/// hotkeys and the overlay Mic button.
+pub type DictationCallback = Arc<Mutex<Box<dyn Fn(HotkeyAction) + Send>>>;
+
+/// Wraps the dictation callback so both the hotkeys and the overlay can
+/// call it.
+pub fn dictation_callback(f: impl Fn(HotkeyAction) + Send + 'static) -> DictationCallback {
+    Arc::new(Mutex::new(Box::new(f)))
+}
+
+/// Calls the shared dictation callback.
+pub fn call_dictation(cb: &DictationCallback, action: HotkeyAction) {
+    if let Ok(f) = cb.lock() {
+        f(action);
+    }
+}
+
+/// Tauri managed state for the overlay buttons.
+pub struct OverlayControl {
+    dictation: DictationCallback,
+    open: Box<dyn Fn() + Send + Sync>,
+    mic: Mutex<MicToggle>,
+}
+
+impl OverlayControl {
+    /// `dictation` is the shared start/stop callback; `open` shows the
+    /// DeepAI Voice window (the tray Settings item).
+    pub fn new(dictation: DictationCallback, open: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            dictation,
+            open: Box::new(open),
+            mic: Mutex::new(MicToggle::default()),
+        }
+    }
+
+    fn run(&self, button: OverlayButton) {
+        match button {
+            OverlayButton::Open => (self.open)(),
+            OverlayButton::Mic => {
+                // The toggle lock is released before calling dictation,
+                // which may emit a status event that takes it again.
+                let action = self.mic.lock().ok().and_then(|mut m| m.click());
+                if let Some(action) = action {
+                    call_dictation(&self.dictation, action);
+                }
+            }
+        }
+    }
+
+    fn on_status(&self, text: &str) {
+        if let Ok(mut m) = self.mic.lock() {
+            m.on_status(text);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared state between the tap callback and the worker
 // ---------------------------------------------------------------------------
@@ -187,7 +389,9 @@ struct Shared {
     state: DragState,
     window: Option<(f64, f64)>,
     edge: Position,
+    /// The small capsule size the frontend reported (not the hover one).
     capsule: Option<(f64, f64)>,
+    hover: HoverTracker,
 }
 
 static SHARED: Mutex<Shared> = Mutex::new(Shared {
@@ -195,7 +399,15 @@ static SHARED: Mutex<Shared> = Mutex::new(Shared {
     window: None,
     edge: Position::Top,
     capsule: None,
+    hover: HoverTracker {
+        open: false,
+        last_inside_ms: 0,
+    },
 });
+
+/// Set once the mouse tap runs. Without it a click on the controls would
+/// reach the app below, so the controls never open.
+static TAP_READY: AtomicBool = AtomicBool::new(false);
 
 /// Records where the overlay window now is (called by `overlay` after
 /// every move) so presses can be hit-tested against the capsule.
@@ -226,11 +438,48 @@ fn handle_shared(kind: MouseKind, point: (f64, f64)) -> DragAction {
     let Ok(mut s) = SHARED.lock() else {
         return DragAction::PassThrough;
     };
-    let frame = s.window.map(|w| Frame {
-        window: w,
-        capsule: overlay::capsule_rect(w, s.edge, s.capsule),
-    });
+    let open = s.hover.is_open();
+    let frame = s.window.map(|w| frame_for(w, s.edge, s.capsule, open));
     s.state.handle(kind, point, frame)
+}
+
+/// The hit-test frame: the small capsule, or the control capsule and its
+/// buttons while the controls are open.
+fn frame_for(window: (f64, f64), edge: Position, base: Option<(f64, f64)>, open: bool) -> Frame {
+    if open {
+        let capsule = overlay::hover_rect(window, edge);
+        Frame {
+            window,
+            capsule,
+            buttons: Some(overlay::button_rects(capsule, edge)),
+        }
+    } else {
+        Frame {
+            window,
+            capsule: overlay::capsule_rect(window, edge, base),
+            buttons: None,
+        }
+    }
+}
+
+/// One cursor poll: updates the hover state and returns it when it changed.
+/// Nothing changes while a press or drag is running.
+fn poll_hover(cursor: (f64, f64), now_ms: u64) -> Option<bool> {
+    let mut s = SHARED.lock().ok()?;
+    if s.state != DragState::Idle {
+        return None;
+    }
+    let window = s.window?;
+    let open = s.hover.is_open();
+    let inside = overlay::hover_zone(window, s.edge, s.capsule, open).contains(cursor.0, cursor.1);
+    s.hover.update(inside, now_ms)
+}
+
+fn close_hover() -> bool {
+    SHARED
+        .lock()
+        .map(|mut s| s.hover.close_now())
+        .unwrap_or(false)
 }
 
 fn reset_shared() -> Option<DragAction> {
@@ -241,17 +490,19 @@ fn reset_shared() -> Option<DragAction> {
 // Worker: moves the window and snaps on drop
 // ---------------------------------------------------------------------------
 
-/// Message from the tap to the worker: a window origin.
+/// Message from the tap to the worker: a window origin or a click.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Msg {
     Move(f64, f64),
     Drop(f64, f64),
+    Click(OverlayButton),
 }
 
 fn msg_for(action: DragAction) -> Option<Msg> {
     match action {
         DragAction::MoveTo(x, y) => Some(Msg::Move(x, y)),
         DragAction::Drop(x, y) => Some(Msg::Drop(x, y)),
+        DragAction::Click(b) => Some(Msg::Click(b)),
         _ => None,
     }
 }
@@ -274,6 +525,15 @@ struct DragPayload {
 
 fn emit_dragging<R: Runtime>(app: &AppHandle<R>, dragging: bool) {
     let _ = app.emit_to(OVERLAY_WINDOW, DRAG_EVENT, DragPayload { dragging });
+}
+
+#[derive(Clone, Serialize)]
+struct HoverPayload {
+    on: bool,
+}
+
+fn emit_hover<R: Runtime>(app: &AppHandle<R>, on: bool) {
+    let _ = app.emit_to(OVERLAY_WINDOW, HOVER_EVENT, HoverPayload { on });
 }
 
 fn monitors<R: Runtime>(app: &AppHandle<R>) -> (Vec<Screen>, Option<Screen>) {
@@ -333,22 +593,99 @@ fn animate_to_anchor<R: Runtime>(
     let _ = window.set_position(LogicalPosition::new(start.0, start.1));
     // The frontend lays the capsule out for the new anchor (and turns it).
     let _ = app.emit_to(OVERLAY_WINDOW, overlay::POSITION_EVENT, anchor.as_str());
-    let pause = std::time::Duration::from_millis(SNAP_MS / SNAP_STEPS as u64);
-    for (x, y) in snap_steps(start, end, SNAP_STEPS) {
-        std::thread::sleep(pause);
+    let (steps, pause_ms, settle_ms) = snap_plan(reduced_motion());
+    for (x, y) in snap_steps(start, end, steps) {
+        if pause_ms > 0 {
+            std::thread::sleep(Duration::from_millis(pause_ms));
+        }
         let _ = window.set_position(LogicalPosition::new(x, y));
     }
-    if from_edge.is_vertical() != anchor.is_vertical() {
-        std::thread::sleep(std::time::Duration::from_millis(TURN_SETTLE_MS));
+    if settle_ms > 0 && from_edge.is_vertical() != anchor.is_vertical() {
+        std::thread::sleep(Duration::from_millis(settle_ms));
     }
 }
 
+/// The system Reduce motion setting (System Settings > Accessibility >
+/// Display). Read once per drop.
+#[cfg(target_os = "macos")]
+fn reduced_motion() -> bool {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    objc2::rc::autoreleasepool(|_| {
+        // SAFETY: NSWorkspace.sharedWorkspace and
+        // -accessibilityDisplayShouldReduceMotion are plain AppKit getters;
+        // the pointer is null-checked before use.
+        unsafe {
+            let ws: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            if ws.is_null() {
+                return false;
+            }
+            msg_send![ws, accessibilityDisplayShouldReduceMotion]
+        }
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reduced_motion() -> bool {
+    false
+}
+
+/// Runs a control button click (worker thread).
+fn run_click<R: Runtime>(app: &AppHandle<R>, button: OverlayButton) {
+    match app.try_state::<OverlayControl>() {
+        Some(control) => control.run(button),
+        None => tracing::warn!("overlay controls not ready"),
+    }
+}
+
+/// Polls the cursor and tells the overlay when the controls open or close.
+fn hover_tick<R: Runtime>(app: &AppHandle<R>, started: Instant) {
+    if !TAP_READY.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(cursor) = cursor_location() else {
+        return;
+    };
+    let now_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if let Some(on) = poll_hover(cursor, now_ms) {
+        emit_hover(app, on);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_location() -> Option<(f64, f64)> {
+    tap::cursor_location()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cursor_location() -> Option<(f64, f64)> {
+    None
+}
+
 fn run_worker<R: Runtime>(app: AppHandle<R>, rx: Receiver<Msg>) {
+    let started = Instant::now();
     let mut dragging = false;
     let mut screens: Vec<Screen> = Vec::new();
     let mut primary: Option<Screen> = None;
-    let mut pending = rx.recv().ok();
-    while let Some(mut msg) = pending.take() {
+    let mut pending: Option<Msg> = None;
+    loop {
+        let mut msg = match pending.take() {
+            Some(m) => m,
+            None => match rx.recv_timeout(Duration::from_millis(HOVER_POLL_MS)) {
+                Ok(m) => m,
+                Err(RecvTimeoutError::Timeout) => {
+                    if !dragging {
+                        hover_tick(&app, started);
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => return,
+            },
+        };
+        if let Msg::Click(button) = msg {
+            run_click(&app, button);
+            continue;
+        }
         // Coalesce queued moves to the newest one.
         let mut next = None;
         if let Msg::Move(..) = msg {
@@ -365,6 +702,10 @@ fn run_worker<R: Runtime>(app: AppHandle<R>, rx: Receiver<Msg>) {
             dragging = true;
             (screens, primary) = monitors(&app);
             emit_dragging(&app, true);
+            // The small capsule is what moves and snaps.
+            if close_hover() {
+                emit_hover(&app, false);
+            }
         }
         match msg {
             Msg::Move(x, y) => {
@@ -389,8 +730,9 @@ fn run_worker<R: Runtime>(app: AppHandle<R>, rx: Receiver<Msg>) {
                 dragging = false;
                 emit_dragging(&app, false);
             }
+            Msg::Click(_) => {}
         }
-        pending = next.or_else(|| rx.recv().ok());
+        pending = next;
     }
 }
 
@@ -401,6 +743,17 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     app.listen_any(CAPSULE_EVENT, |event| {
         if let Some(size) = overlay::parse_capsule_size(event.payload()) {
             set_capsule_size(size);
+        }
+    });
+    // The Mic button follows the dictation status (Rust listeners also get
+    // events emitted from Rust).
+    let status_app = app.clone();
+    app.listen_any(DICTATION_STATUS_EVENT, move |event| {
+        if let (Ok(text), Some(control)) = (
+            serde_json::from_str::<String>(event.payload()),
+            status_app.try_state::<OverlayControl>(),
+        ) {
+            control.on_status(&text);
         }
     });
     let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(QUEUE);
@@ -421,7 +774,10 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
                 loop {
                     if crate::paste::macos::is_accessibility_trusted() {
                         match tap::install(tx) {
-                            Ok(()) => tracing::info!("overlay drag tap started"),
+                            Ok(()) => {
+                                TAP_READY.store(true, Ordering::Release);
+                                tracing::info!("overlay drag tap started");
+                            }
                             Err(e) => tracing::warn!("overlay drag tap unavailable: {e}"),
                         }
                         break;
@@ -520,6 +876,22 @@ mod tap {
         ) -> *mut c_void;
         fn CGEventTapEnable(tap: *mut c_void, enable: bool);
         fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+        fn CGEventCreate(source: *mut c_void) -> *mut c_void;
+    }
+
+    /// The global cursor position (same space as the tap's event points).
+    pub(super) fn cursor_location() -> Option<(f64, f64)> {
+        // SAFETY: CGEventCreate(NULL) returns a new event (or null) holding
+        // the current cursor location; it is released once read.
+        unsafe {
+            let event = CGEventCreate(std::ptr::null_mut());
+            if event.is_null() {
+                return None;
+            }
+            let p = CGEventGetLocation(event);
+            CFRelease(event);
+            Some((p.x, p.y))
+        }
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -660,7 +1032,208 @@ mod tests {
                 w: 56.0,
                 h: 30.0,
             },
+            buttons: None,
         })
+    }
+
+    /// The same window, open on hover: an 84 x 36 control capsule at
+    /// (114, 210) with Mic at (124, 214) and Open at (160, 214), 28 x 28.
+    fn hover_frame() -> Option<Frame> {
+        let capsule = Rect {
+            x: 114.0,
+            y: 210.0,
+            w: 84.0,
+            h: 36.0,
+        };
+        Some(Frame {
+            window: (100.0, 200.0),
+            capsule,
+            buttons: Some(overlay::button_rects(capsule, Position::Top)),
+        })
+    }
+
+    // ---- 2.3c: buttons in the hover capsule ---------------------------------
+
+    #[test]
+    fn a_button_click_fires_on_release_inside_that_button() {
+        let mut s = DragState::Idle;
+        assert_eq!(
+            s.handle(MouseKind::Down, (130.0, 220.0), hover_frame()),
+            DragAction::Swallow
+        );
+        assert!(matches!(
+            s,
+            DragState::Pressed {
+                target: PressTarget::Button(OverlayButton::Mic, _),
+                ..
+            }
+        ));
+        assert_eq!(
+            s.handle(MouseKind::Up, (131.0, 221.0), hover_frame()),
+            DragAction::Click(OverlayButton::Mic)
+        );
+        assert_eq!(s, DragState::Idle);
+        s.handle(MouseKind::Down, (170.0, 230.0), hover_frame());
+        assert_eq!(
+            s.handle(MouseKind::Up, (170.0, 230.0), hover_frame()),
+            DragAction::Click(OverlayButton::Open)
+        );
+    }
+
+    #[test]
+    fn a_button_press_never_drags_and_cancels_when_released_outside() {
+        let mut s = DragState::Idle;
+        s.handle(MouseKind::Down, (130.0, 220.0), hover_frame());
+        // Far past the drag threshold: still no move.
+        assert_eq!(
+            s.handle(MouseKind::Dragged, (300.0, 400.0), hover_frame()),
+            DragAction::Swallow
+        );
+        assert_eq!(
+            s.handle(MouseKind::Up, (300.0, 400.0), hover_frame()),
+            DragAction::Swallow
+        );
+        assert_eq!(s, DragState::Idle);
+        // Released on the other button: nothing fires either.
+        s.handle(MouseKind::Down, (130.0, 220.0), hover_frame());
+        assert_eq!(
+            s.handle(MouseKind::Up, (170.0, 230.0), hover_frame()),
+            DragAction::Swallow
+        );
+    }
+
+    #[test]
+    fn the_hover_body_outside_the_buttons_drags_and_a_plain_click_does_nothing() {
+        let mut s = DragState::Idle;
+        // Between the two buttons, inside the control capsule.
+        assert_eq!(
+            s.handle(MouseKind::Down, (156.0, 228.0), hover_frame()),
+            DragAction::Swallow
+        );
+        assert!(matches!(
+            s,
+            DragState::Pressed {
+                target: PressTarget::Body,
+                ..
+            }
+        ));
+        assert_eq!(
+            s.handle(MouseKind::Up, (156.0, 228.0), hover_frame()),
+            DragAction::Swallow
+        );
+        // A press on the rim then a move drags the window as before.
+        s.handle(MouseKind::Down, (116.0, 212.0), hover_frame());
+        assert_eq!(
+            s.handle(MouseKind::Dragged, (126.0, 212.0), hover_frame()),
+            DragAction::MoveTo(110.0, 200.0)
+        );
+        assert_eq!(
+            s.handle(MouseKind::Up, (126.0, 212.0), None),
+            DragAction::Drop(110.0, 200.0)
+        );
+        // Outside the control capsule: not ours.
+        assert_eq!(
+            s.handle(MouseKind::Down, (102.0, 202.0), hover_frame()),
+            DragAction::PassThrough
+        );
+    }
+
+    #[test]
+    fn clicks_reach_the_worker() {
+        assert_eq!(
+            msg_for(DragAction::Click(OverlayButton::Open)),
+            Some(Msg::Click(OverlayButton::Open))
+        );
+        assert!(DragAction::Click(OverlayButton::Mic).swallows());
+    }
+
+    // ---- 2.3c: hover tracker ------------------------------------------------
+
+    #[test]
+    fn hover_opens_at_once_and_closes_400_ms_after_the_cursor_leaves() {
+        let mut h = HoverTracker::default();
+        assert!(!h.is_open());
+        assert_eq!(h.update(false, 0), None);
+        assert_eq!(h.update(true, 50), Some(true));
+        assert_eq!(h.update(true, 100), None);
+        // Left at 150: still open until 400 ms after the last inside poll.
+        assert_eq!(h.update(false, 150), None);
+        assert_eq!(h.update(false, 450), None);
+        assert_eq!(h.update(false, 500), Some(false));
+        assert!(!h.is_open());
+        assert_eq!(h.update(false, 900), None);
+    }
+
+    #[test]
+    fn coming_back_before_the_close_keeps_it_open() {
+        let mut h = HoverTracker::default();
+        h.update(true, 0);
+        assert_eq!(h.update(false, 300), None);
+        assert_eq!(h.update(true, 350), None);
+        assert_eq!(h.update(false, 700), None);
+        assert_eq!(h.update(false, 750), Some(false));
+        const {
+            assert!(HOVER_POLL_MS >= 30 && HOVER_POLL_MS <= 80);
+            assert!(HOVER_CLOSE_MS >= 300 && HOVER_CLOSE_MS <= 500);
+        }
+    }
+
+    #[test]
+    fn close_now_reports_only_a_change() {
+        let mut h = HoverTracker::default();
+        assert!(!h.close_now());
+        h.update(true, 0);
+        assert!(h.close_now());
+        assert!(!h.is_open());
+    }
+
+    // ---- 2.3c: mic button ---------------------------------------------------
+
+    #[test]
+    fn mic_clicks_alternate_start_and_stop() {
+        let mut m = MicToggle::default();
+        assert_eq!(m.click(), Some(HotkeyAction::StartRecording));
+        m.on_status("REC");
+        assert_eq!(m.click(), Some(HotkeyAction::StopRecording));
+        m.on_status("...");
+        m.on_status("");
+        assert_eq!(m.click(), Some(HotkeyAction::StartRecording));
+    }
+
+    #[test]
+    fn mic_click_is_ignored_while_a_key_hold_is_recording() {
+        let mut m = MicToggle::default();
+        // Fn or the shortcut started this recording, not a click.
+        m.on_status("REC");
+        assert_eq!(m.click(), None);
+        assert_eq!(m.click(), None);
+        m.on_status("");
+        assert_eq!(m.click(), Some(HotkeyAction::StartRecording));
+    }
+
+    #[test]
+    fn a_recording_that_ends_another_way_resets_the_toggle() {
+        let mut m = MicToggle::default();
+        assert_eq!(m.click(), Some(HotkeyAction::StartRecording));
+        // Mic denied, or Esc cancelled: the next click starts again.
+        m.on_status("Mic denied in Settings");
+        assert_eq!(m.click(), Some(HotkeyAction::StartRecording));
+        m.on_status("REC");
+        m.on_status("");
+        assert_eq!(m.click(), Some(HotkeyAction::StartRecording));
+    }
+
+    // ---- Review fix: reduced motion skips the eased snap ---------------------
+
+    #[test]
+    fn reduced_motion_jumps_straight_to_the_anchor() {
+        assert_eq!(snap_plan(true), (1, 0, 0));
+        assert_eq!(
+            snap_plan(false),
+            (SNAP_STEPS, SNAP_MS / SNAP_STEPS as u64, TURN_SETTLE_MS)
+        );
+        let jump = snap_steps((0.0, 0.0), (50.0, 60.0), snap_plan(true).0);
+        assert_eq!(jump, vec![(50.0, 60.0)]);
     }
 
     #[test]
@@ -674,7 +1247,8 @@ mod tests {
             s,
             DragState::Pressed {
                 start: (140.0, 220.0),
-                grab: (40.0, 20.0)
+                grab: (40.0, 20.0),
+                target: PressTarget::Body,
             }
         );
     }

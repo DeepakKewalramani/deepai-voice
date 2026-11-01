@@ -89,13 +89,23 @@ pub fn run() {
             providers::commands::save_custom_provider,
             providers::commands::delete_custom_provider,
             providers::commands::open_provider_docs,
-            providers::commands::test_provider
+            providers::commands::test_provider,
         ])
         .setup(move |app| {
             // First launch of the installed app turns on launch at login once.
             autostart::on_launch(app.handle());
-            let on_action = dictation::spawn(app.handle().clone());
-            hotkey::start(app.handle(), hotkey_tx, hotkey_rx, on_action);
+            // One start/stop callback, shared by the hotkeys and the pill's
+            // Mic button.
+            let on_action =
+                overlay_drag::dictation_callback(dictation::spawn(app.handle().clone()));
+            let hotkey_action = on_action.clone();
+            hotkey::start(app.handle(), hotkey_tx, hotkey_rx, move |a| {
+                overlay_drag::call_dictation(&hotkey_action, a)
+            });
+            let open_app = app.handle().clone();
+            app.manage(overlay_drag::OverlayControl::new(on_action, move || {
+                show_main_window(&open_app)
+            }));
             // Menu bar app: no Dock icon on macOS.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);

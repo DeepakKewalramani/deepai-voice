@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  BUTTON_GAP,
+  BUTTON_SIZE,
   CAPSULE_SIZES,
+  HOVER_SIZE,
   IDLE,
   WAVE_AMP_MAX,
   WAVE_H,
@@ -9,9 +12,12 @@ import {
   WINDOW_W,
   capsuleSize,
   draggingFromPayload,
+  hoverFromPayload,
+  hoverFromSearch,
   isOverlaySearch,
   isVertical,
   levelFromPayload,
+  micLabel,
   overlayStateFromText,
   positionFromText,
   previewFromSearch,
@@ -101,18 +107,35 @@ describe("search params", () => {
 const ys = (d: string) =>
   d.split(" L").map((seg) => Number(seg.replace(/^M/, "").split(" ")[1]));
 
+// 2.3c: idle is a tiny thin capsule, listening is compact, and the hover
+// controls are the largest capsule. Size numbers below changed with it.
+const ALL_SIZES = [...Object.values(CAPSULE_SIZES), HOVER_SIZE];
+
 describe("capsule sizes", () => {
-  it("is a small plain capsule when idle or in error", () => {
-    expect(capsuleSize("idle")).toEqual({ width: 76, height: 24 });
-    expect(capsuleSize("error")).toEqual(capsuleSize("idle"));
+  it("is a tiny thin capsule when idle and a small one in error", () => {
+    expect(capsuleSize("idle")).toEqual({ width: 36, height: 8 });
+    expect(capsuleSize("error")).toEqual({ width: 48, height: 14 });
+    // Error stays small: no bigger than the compact listening capsule.
+    expect(capsuleSize("error").width).toBeLessThan(
+      capsuleSize("listening").width,
+    );
   });
   it("grows to hold the wave while listening or thinking", () => {
-    expect(capsuleSize("listening")).toEqual({ width: 116, height: 26 });
+    expect(capsuleSize("listening")).toEqual({ width: 72, height: 20 });
     expect(capsuleSize("thinking")).toEqual(capsuleSize("listening"));
   });
-  it("fits every size in the 144 x 44 overlay window with the drag lift", () => {
-    expect([WINDOW_W, WINDOW_H]).toEqual([144, 44]);
-    for (const { width, height } of Object.values(CAPSULE_SIZES)) {
+  it("opens into the control capsule with two round buttons", () => {
+    expect(HOVER_SIZE).toEqual({ width: 84, height: 36 });
+    expect(BUTTON_SIZE).toBe(28);
+    // Two buttons, the gap and at least 8 px of rim on each end.
+    expect(2 * BUTTON_SIZE + BUTTON_GAP + 16).toBeLessThanOrEqual(
+      HOVER_SIZE.width,
+    );
+    expect(BUTTON_SIZE + 8).toBeLessThanOrEqual(HOVER_SIZE.height);
+  });
+  it("fits every size in the 112 x 56 overlay window with the drag lift", () => {
+    expect([WINDOW_W, WINDOW_H]).toEqual([112, 56]);
+    for (const { width, height } of ALL_SIZES) {
       expect(width * 1.04 + 16).toBeLessThanOrEqual(WINDOW_W);
       expect(height * 1.04 + 16).toBeLessThanOrEqual(WINDOW_H);
     }
@@ -120,8 +143,8 @@ describe("capsule sizes", () => {
   it("fits every size turned upright in the swapped left and right window", () => {
     for (const pos of ["left", "right"] as const) {
       const win = windowSizeFor(pos);
-      expect(win).toEqual({ width: 44, height: 144 });
-      for (const { width, height } of Object.values(CAPSULE_SIZES)) {
+      expect(win).toEqual({ width: 56, height: 112 });
+      for (const { width, height } of ALL_SIZES) {
         // Rotated 90 degrees: the capsule height runs across the window.
         expect(height * 1.04 + 16).toBeLessThanOrEqual(win.width);
         expect(width * 1.04 + 16).toBeLessThanOrEqual(win.height);
@@ -143,7 +166,7 @@ describe("orientation", () => {
     expect(isVertical("right")).toBe(true);
     expect(isVertical("top")).toBe(false);
     expect(isVertical("bottom")).toBe(false);
-    expect(windowSizeFor("top")).toEqual({ width: 144, height: 44 });
+    expect(windowSizeFor("top")).toEqual({ width: 112, height: 56 });
     expect(windowSizeFor("bottom")).toEqual(windowSizeFor("top"));
   });
 });
@@ -197,11 +220,32 @@ describe("event payloads", () => {
     expect(levelFromPayload(Number.NaN)).toBeNull();
     expect(levelFromPayload("0.4")).toBeNull();
   });
+  it("reads the hover flag", () => {
+    expect(hoverFromPayload({ on: true })).toBe(true);
+    expect(hoverFromPayload({ on: false })).toBe(false);
+    expect(hoverFromPayload({ on: 1 })).toBe(false);
+    expect(hoverFromPayload(null)).toBe(false);
+    expect(hoverFromPayload(true)).toBe(false);
+  });
   it("reads the drag flag", () => {
     expect(draggingFromPayload({ dragging: true })).toBe(true);
     expect(draggingFromPayload({ dragging: false })).toBe(false);
     expect(draggingFromPayload({ dragging: "yes" })).toBe(false);
     expect(draggingFromPayload(null)).toBe(false);
     expect(draggingFromPayload(true)).toBe(false);
+  });
+});
+
+describe("hover controls", () => {
+  it("previews hover only with ?hover=1", () => {
+    expect(hoverFromSearch("?view=overlay&hover=1")).toBe(true);
+    expect(hoverFromSearch("?view=overlay&hover=0")).toBe(false);
+    expect(hoverFromSearch("?view=overlay")).toBe(false);
+  });
+  it("names the mic button by what a click does", () => {
+    expect(micLabel("idle")).toBe("Start dictation");
+    expect(micLabel("error")).toBe("Start dictation");
+    expect(micLabel("listening")).toBe("Stop dictation");
+    expect(micLabel("thinking")).toBe("Start dictation");
   });
 });

@@ -48,25 +48,34 @@ export function isOverlaySearch(search: string): boolean {
   return new URLSearchParams(search).get("view") === "overlay";
 }
 
-/** Capsule size in px for each look, unrotated (idle and error are the
- * small plain capsule; listening and thinking grow to hold the wave). On the
- * left and right anchors the capsule is turned 90 degrees, so it stands
- * `height` wide and `width` tall. Keep in sync with `DEFAULT_CAPSULE` and
- * the window size in src-tauri/src/overlay.rs. */
+/** Capsule size in px for each look, unrotated (idle is a tiny thin
+ * capsule, error a small one, listening and thinking a compact capsule that
+ * holds the wave). On the left and right anchors the capsule is turned 90
+ * degrees, so it stands `height` wide and `width` tall. Keep in sync with
+ * `DEFAULT_CAPSULE` and the window size in src-tauri/src/overlay.rs. */
 export const CAPSULE_SIZES: Record<
   OverlayMode,
   { width: number; height: number }
 > = {
-  idle: { width: 76, height: 24 },
-  error: { width: 76, height: 24 },
-  thinking: { width: 116, height: 26 },
-  listening: { width: 116, height: 26 },
+  idle: { width: 36, height: 8 },
+  error: { width: 48, height: 14 },
+  thinking: { width: 72, height: 20 },
+  listening: { width: 72, height: 20 },
 };
 
+/** The control capsule shown while the cursor is over the pill, unrotated
+ * (overlay.rs `HOVER_CAPSULE`). */
+export const HOVER_SIZE = { width: 84, height: 36 } as const;
+/** Side of each round control button (overlay.rs `BUTTON_SIZE`). */
+export const BUTTON_SIZE = 28;
+/** Gap between the two buttons (overlay.rs `BUTTON_GAP`). */
+export const BUTTON_GAP = 8;
+
 /** Overlay window size in px for a horizontal capsule (top and bottom);
- * left and right use it swapped (overlay.rs `window_size_for`). */
-export const WINDOW_W = 144;
-export const WINDOW_H = 44;
+ * left and right use it swapped (overlay.rs `window_size_for`). It holds
+ * the largest capsule, the hover controls, with the drag lift. */
+export const WINDOW_W = 112;
+export const WINDOW_H = 56;
 
 /** True on the left and right anchors, where the capsule stands upright. */
 export function isVertical(pos: OverlayPosition): boolean {
@@ -91,13 +100,13 @@ export function capsuleSize(mode: OverlayMode): {
 }
 
 /** Wave drawing box inside the capsule, in px. */
-export const WAVE_W = 88;
-export const WAVE_H = 14;
-/** Largest wave amplitude in px: the crest plus half the 1.75 px stroke
+export const WAVE_W = 52;
+export const WAVE_H = 10;
+/** Largest wave amplitude in px: the crest plus half the 1.5 px stroke
  * stays inside the wave box, so the line never touches the capsule rim. */
-export const WAVE_AMP_MAX = 5;
+export const WAVE_AMP_MAX = 4;
 /** Short flat line shown in the small error capsule. */
-export const ERROR_LINE_W = 38;
+export const ERROR_LINE_W = 24;
 
 /**
  * Wave amplitude in px at time `t` (ms). Listening breathes slowly, or
@@ -151,6 +160,25 @@ export function levelFromPayload(payload: unknown): number | null {
   return typeof payload === "number" && Number.isFinite(payload)
     ? clamp01(payload)
     : null;
+}
+
+/** The `overlay-hover` event payload: true only for `{on: true}`. */
+export function hoverFromPayload(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { on?: unknown }).on === true
+  );
+}
+
+/** Dev preview only: `?hover=1` shows the hover controls. */
+export function hoverFromSearch(search: string): boolean {
+  return new URLSearchParams(search).get("hover") === "1";
+}
+
+/** Accessible name of the mic button: what a click does now. */
+export function micLabel(mode: OverlayMode): string {
+  return mode === "listening" ? "Stop dictation" : "Start dictation";
 }
 
 /** The `overlay-drag` event payload: true only for `{dragging: true}`. */

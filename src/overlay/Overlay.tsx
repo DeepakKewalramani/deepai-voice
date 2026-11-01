@@ -3,6 +3,7 @@ import "./overlay.css";
 import {
   ERROR_HOLD_MS,
   ERROR_LINE_W,
+  HOVER_SIZE,
   IDLE,
   OverlayMode,
   OverlayPosition,
@@ -11,8 +12,11 @@ import {
   WAVE_W,
   capsuleSize,
   draggingFromPayload,
+  hoverFromPayload,
+  hoverFromSearch,
   isVertical,
   levelFromPayload,
+  micLabel,
   overlayStateFromText,
   positionFromText,
   sinePath,
@@ -29,11 +33,13 @@ export const OVERLAY_POSITION_EVENT = "overlay-position";
 export const OVERLAY_DRAG_EVENT = "overlay-drag";
 /** Event the pill sends with its capsule size, for the drag hit test. */
 export const OVERLAY_CAPSULE_EVENT = "overlay-capsule";
-/** Dev-only window event: `{ status?, position? }`. */
+/** Event Rust sends when the cursor comes near the pill: `{ on: bool }`. */
+export const OVERLAY_HOVER_EVENT = "overlay-hover";
+/** Dev-only window event: `{ status?, position?, hover? }`. */
 export const OVERLAY_PREVIEW_EVENT = "overlay-preview";
 
 /** Static gentle wave for reduced motion and the first paint. */
-const STILL_AMPLITUDE = 3.5;
+const STILL_AMPLITUDE = 2.8;
 /** Thinking travels slower than listening. */
 const THINKING_SPEED = 0.35;
 
@@ -62,20 +68,79 @@ interface Props {
   /** Ignored: the capsule shows no text. Kept for src/main.tsx. */
   initialPartial?: string;
   initialDragging?: boolean;
+  /** Start with the hover controls open (tests and dev preview). */
+  initialHover?: boolean;
 }
 
-/** DeepAI sine capsule: a plain graphite capsule that shows one moving
- * sine line while listening, shown in the transparent `overlay` window. On
- * the left and right anchors CSS turns the whole capsule (wave included)
- * 90 degrees; the wave is always drawn along the capsule's own x axis. */
+/** Mic glyph: a rounded capsule body on a cradle and stem. */
+function MicGlyph() {
+  return (
+    <svg
+      className="ov-glyph"
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect x="4.6" y="1.2" width="4.8" height="7.4" rx="2.4" />
+      <path d="M2.6 6.6a4.4 4.4 0 0 0 8.8 0M7 11v1.8" />
+    </svg>
+  );
+}
+
+/** DeepAI Voice logo mark: five rounded level bars (src/ui/icons.tsx). */
+function LogoGlyph() {
+  return (
+    <svg
+      className="ov-glyph ov-logo"
+      width="14"
+      height="14"
+      viewBox="0 0 18 18"
+      fill="none"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient
+          id="ov-logo-grad"
+          gradientUnits="userSpaceOnUse"
+          x1="2"
+          y1="0"
+          x2="16"
+          y2="0"
+        >
+          <stop offset="0" stopColor="#ff8a4c" />
+          <stop offset="1" stopColor="#b86bff" />
+        </linearGradient>
+      </defs>
+      <path d="M3 7.5v3M6.5 4.5v9M10 2.5v13M13.5 6v6M16 8v2" />
+    </svg>
+  );
+}
+
+/** DeepAI sine capsule: a tiny quiet graphite capsule when idle, one moving
+ * sine line while listening, and a glass control capsule with Mic and Open
+ * buttons while the cursor is over it (Rust detects the hover and handles
+ * the clicks: the window itself stays click-through). On the left and
+ * right anchors CSS turns the whole capsule 90 degrees; the wave is always
+ * drawn along the capsule's own x axis and the glyphs turn back upright. */
 export default function Overlay({
   initialState = IDLE,
   initialPosition = "top",
   initialDragging = false,
+  initialHover = false,
 }: Props) {
   const [state, setState] = useState<OverlayState>(initialState);
   const [position, setPosition] = useState<OverlayPosition>(initialPosition);
   const [dragging, setDragging] = useState<boolean>(initialDragging);
+  // Dev preview: `?hover=1` opens the controls in a plain browser.
+  const [hover, setHover] = useState<boolean>(
+    () =>
+      initialHover ||
+      (import.meta.env.DEV &&
+        typeof window !== "undefined" &&
+        hoverFromSearch(window.location.search)),
+  );
   const pathRef = useRef<SVGPathElement>(null);
   const levelRef = useRef<number | null>(null);
 
@@ -100,6 +165,9 @@ export default function Overlay({
           listen<unknown>(OVERLAY_DRAG_EVENT, (e) =>
             setDragging(draggingFromPayload(e.payload)),
           ),
+          listen<unknown>(OVERLAY_HOVER_EVENT, (e) =>
+            setHover(hoverFromPayload(e.payload)),
+          ),
           listen<unknown>(DICTATION_LEVEL_EVENT, (e) => {
             levelRef.current = levelFromPayload(e.payload);
           }),
@@ -123,9 +191,16 @@ export default function Overlay({
     if (!import.meta.env.DEV) return;
     const onPreview = (e: Event) => {
       const d =
-        (e as CustomEvent<{ status?: string; position?: string }>).detail ?? {};
+        (
+          e as CustomEvent<{
+            status?: string;
+            position?: string;
+            hover?: boolean;
+          }>
+        ).detail ?? {};
       if (d.status !== undefined) setState(overlayStateFromText(d.status));
       if (d.position !== undefined) setPosition(positionFromText(d.position));
+      if (d.hover !== undefined) setHover(d.hover === true);
     };
     window.addEventListener(OVERLAY_PREVIEW_EVENT, onPreview);
     return () => window.removeEventListener(OVERLAY_PREVIEW_EVENT, onPreview);
@@ -139,7 +214,10 @@ export default function Overlay({
   }, [state]);
 
   const { mode, label } = state;
+  // The small capsule for this look. Rust knows the hover size itself.
   const size = capsuleSize(mode);
+  const shown = hover ? HOVER_SIZE : size;
+  const showWave = !hover && mode !== "idle";
 
   // Tell Rust the capsule size so a press is only grabbed on the capsule.
   useEffect(() => {
@@ -153,6 +231,7 @@ export default function Overlay({
   // is visible, and never with reduced motion (the still path stays).
   useEffect(() => {
     if (mode !== "listening" && mode !== "thinking") return;
+    if (!showWave) return;
     if (prefersReducedMotion()) return;
     const speed = mode === "thinking" ? THINKING_SPEED : 1;
     let raf = 0;
@@ -180,11 +259,11 @@ export default function Overlay({
       document.removeEventListener("visibilitychange", start);
       if (raf !== 0) cancelAnimationFrame(raf);
     };
-  }, [mode]);
+  }, [mode, showWave]);
 
   const style = {
-    "--w": `${size.width}px`,
-    "--h": `${size.height}px`,
+    "--w": `${shown.width}px`,
+    "--h": `${shown.height}px`,
   } as CSSProperties;
   const lineW = mode === "error" ? ERROR_LINE_W : WAVE_W;
   return (
@@ -194,15 +273,45 @@ export default function Overlay({
       data-orient={isVertical(position) ? "vertical" : "horizontal"}
       data-mode={mode}
       data-dragging={dragging ? "true" : undefined}
+      data-hover={hover ? "true" : undefined}
     >
       <div
         className="ov-pill"
         style={style}
-        role="status"
-        aria-live="polite"
-        aria-label={mode === "idle" ? "DeepAI Voice ready" : label}
+        role={hover ? "group" : "status"}
+        aria-live={hover ? undefined : "polite"}
+        aria-label={
+          hover
+            ? "DeepAI Voice controls"
+            : mode === "idle"
+              ? "DeepAI Voice ready"
+              : label
+        }
       >
-        {mode !== "idle" && (
+        {hover && (
+          // Clicks arrive through the Rust mouse tap (the window ignores
+          // the mouse), so the buttons are never focusable.
+          <div className="ov-controls">
+            <button
+              type="button"
+              className="ov-btn ov-btn-mic"
+              tabIndex={-1}
+              aria-label={micLabel(mode)}
+              aria-pressed={mode === "listening"}
+            >
+              <MicGlyph />
+            </button>
+            <button
+              type="button"
+              className="ov-btn ov-btn-open"
+              tabIndex={-1}
+              aria-label="Open DeepAI Voice"
+            >
+              <LogoGlyph />
+            </button>
+          </div>
+        )}
+        {showWave && (
           <svg
             className="ov-wave"
             width={lineW}
