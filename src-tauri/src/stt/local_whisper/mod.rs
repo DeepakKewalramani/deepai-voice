@@ -45,12 +45,43 @@ pub struct Transcript {
     pub elapsed: Duration,
 }
 
-/// Picks a CPU thread count: available cores, at most 8, at least 1.
+/// Thread count for whisper: physical cores minus one (leave one for audio,
+/// typing and the UI), at least 2, at most 8. Without a physical count, half
+/// the logical cores stand in for it.
+pub fn threads_for(physical: Option<usize>, logical: usize) -> usize {
+    let cores = physical.unwrap_or(logical / 2).max(1);
+    cores.saturating_sub(1).clamp(2, 8)
+}
+
+/// Physical core count from `sysctl hw.physicalcpu` (macOS), if readable.
+fn physical_cores() -> Option<usize> {
+    let out = std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.physicalcpu"])
+        .output()
+        .ok()?;
+    String::from_utf8(out.stdout).ok()?.trim().parse().ok()
+}
+
+/// Picks the CPU thread count with `threads_for`.
 pub fn default_threads() -> usize {
-    std::thread::available_parallelism()
+    let logical = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, 8)
+        .unwrap_or(2);
+    threads_for(physical_cores(), logical)
+}
+
+/// Encoder frames per second of audio (1500 frames cover 30 s).
+const CTX_PER_SECOND: usize = 50;
+/// Smallest and largest audio context for a partial pass.
+pub const MIN_AUDIO_CTX: i32 = 256;
+pub const MAX_AUDIO_CTX: i32 = 1500;
+
+/// Reduced encoder context for a partial pass over `samples` (16 kHz):
+/// ceil(seconds * 50), at least 256, at most the full 1500. Whisper otherwise
+/// encodes a full 30 s window, so a short partial costs as much as a long one.
+pub fn partial_audio_ctx(samples: usize) -> i32 {
+    let frames = (samples * CTX_PER_SECOND).div_ceil(SAMPLE_RATE);
+    (frames.min(MAX_AUDIO_CTX as usize) as i32).max(MIN_AUDIO_CTX)
 }
 
 /// A loaded Whisper model and its reusable decode state.
@@ -107,10 +138,24 @@ impl LocalWhisper {
         self.transcribe_timed(samples).map(|t| t.text)
     }
 
+    /// Fast, less exact pass for live partials: reduced audio context
+    /// (`partial_audio_ctx`). Finals keep the full context.
+    pub fn transcribe_partial(&mut self, samples: &[f32]) -> Result<String> {
+        self.run(samples, Some(partial_audio_ctx(samples.len())))
+            .map(|t| t.text)
+    }
+
     /// Like [`LocalWhisper::transcribe`], with timing. Logs lengths and durations only.
     pub fn transcribe_timed(&mut self, samples: &[f32]) -> Result<Transcript> {
+        self.run(samples, None)
+    }
+
+    fn run(&mut self, samples: &[f32], audio_ctx: Option<i32>) -> Result<Transcript> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_n_threads(self.threads as i32);
+        if let Some(ctx) = audio_ctx {
+            params.set_audio_ctx(ctx);
+        }
         params.set_language(Some("en"));
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -132,9 +177,10 @@ impl LocalWhisper {
         let elapsed = started.elapsed();
         let audio = Duration::from_secs_f64(samples.len() as f64 / SAMPLE_RATE as f64);
         tracing::info!(
-            "local_whisper event=transcribed audio_ms={} elapsed_ms={} chars={}",
+            "local_whisper event=transcribed audio_ms={} elapsed_ms={} audio_ctx={} chars={}",
             audio.as_millis(),
             elapsed.as_millis(),
+            audio_ctx.unwrap_or(0),
             text.chars().count()
         );
         Ok(Transcript {
@@ -156,6 +202,26 @@ mod tests {
             .expect("must fail");
         assert!(matches!(err, WhisperError::ModelMissing(_)));
         assert!(err.to_string().contains("no/such/model.bin"));
+    }
+
+    #[test]
+    fn threads_leave_one_core_free_with_a_minimum_of_two() {
+        assert_eq!(threads_for(Some(8), 16), 7);
+        assert_eq!(threads_for(Some(4), 8), 3);
+        assert_eq!(threads_for(Some(2), 4), 2);
+        assert_eq!(threads_for(Some(1), 1), 2);
+        assert_eq!(threads_for(Some(24), 24), 8);
+        assert_eq!(threads_for(None, 10), 4);
+    }
+
+    #[test]
+    fn partial_context_scales_with_audio_length() {
+        assert_eq!(partial_audio_ctx(0), MIN_AUDIO_CTX);
+        assert_eq!(partial_audio_ctx(SAMPLE_RATE), MIN_AUDIO_CTX); // 1 s -> 50
+        assert_eq!(partial_audio_ctx(SAMPLE_RATE * 6), 300);
+        assert_eq!(partial_audio_ctx(SAMPLE_RATE * 6 + 1), 301);
+        assert_eq!(partial_audio_ctx(SAMPLE_RATE * 30), MAX_AUDIO_CTX);
+        assert_eq!(partial_audio_ctx(SAMPLE_RATE * 60), MAX_AUDIO_CTX);
     }
 
     #[test]

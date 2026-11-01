@@ -63,6 +63,14 @@ pub fn stable_text(previous: &str, newest: &str) -> String {
     new[..agreed].join(" ")
 }
 
+/// Streaming engine rule: its partials arrive fast and revise themselves, so
+/// every word of `newest` except the last one counts as stable. The last word
+/// is held back because it is often still being spoken.
+pub fn eager_stable_text(newest: &str) -> String {
+    let words: Vec<&str> = newest.split_whitespace().collect();
+    words[..words.len().saturating_sub(1)].join(" ")
+}
+
 /// Edit that turns `typed` into `target`, keeping their common start.
 /// Backspaces are counted in visible characters and never split one.
 pub fn reconcile(typed: &str, target: &str) -> Edit {
@@ -84,6 +92,8 @@ pub struct SegmentTyping {
     /// Exactly what this segment has typed so far, including the lead space.
     typed: String,
     previous: String,
+    /// Streaming engine partials: use `eager_stable_text`, not agreement.
+    eager: bool,
 }
 
 impl SegmentTyping {
@@ -92,6 +102,16 @@ impl SegmentTyping {
             lead_space,
             typed: String::new(),
             previous: String::new(),
+            eager: false,
+        }
+    }
+
+    /// Typing state for a streaming engine segment: words are typed as soon
+    /// as a newer word follows them (`eager_stable_text`).
+    pub fn eager(lead_space: bool) -> Self {
+        Self {
+            eager: true,
+            ..Self::new(lead_space)
         }
     }
 
@@ -112,7 +132,11 @@ impl SegmentTyping {
     /// Feeds a new partial hypothesis. Returns text to type when the agreed
     /// words extend what is already typed. Never deletes.
     pub fn on_hypothesis(&mut self, hypothesis: &str) -> Option<String> {
-        let stable = stable_text(&self.previous, hypothesis);
+        let stable = if self.eager {
+            eager_stable_text(hypothesis)
+        } else {
+            stable_text(&self.previous, hypothesis)
+        };
         self.previous = hypothesis.to_string();
         let target = self.with_lead(&stable);
         if target.len() > self.typed.len() && target.starts_with(&self.typed) {

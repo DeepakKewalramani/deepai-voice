@@ -39,6 +39,12 @@ pub enum Input {
         seq: u64,
         text: String,
     },
+    /// Partial of the streaming engine for segment `seq` (one engine session).
+    /// Typed eagerly: every word but the newest last one.
+    StreamPartial {
+        seq: u64,
+        text: String,
+    },
     /// Result of the last Paste or Correct; the error is the status text.
     Pasted(Result<(), String>),
     /// A focus or secure-field guard stopped the last Paste or Correct.
@@ -196,7 +202,10 @@ impl Machine {
                 self.state = S::Error(msg);
                 out.push(Effect::ScheduleClearError);
             }
-            (S::Recording, Input::Partial { seq, text }) => self.on_partial(seq, &text, out),
+            (S::Recording, Input::Partial { seq, text }) => self.on_partial(seq, &text, false, out),
+            (S::Recording, Input::StreamPartial { seq, text }) => {
+                self.on_partial(seq, &text, true, out)
+            }
             (S::Recording | S::Transcribing, Input::Segment { seq, outcome }) => {
                 self.on_final(Some(seq), outcome, out);
             }
@@ -230,13 +239,18 @@ impl Machine {
         }
     }
 
-    fn on_partial(&mut self, seq: u64, text: &str, out: &mut Vec<Effect>) {
+    fn on_partial(&mut self, seq: u64, text: &str, eager: bool, out: &mut Vec<Effect>) {
         let hold = &mut self.hold;
         if seq <= hold.last_final_seq {
             return;
         }
         if hold.open.as_ref().is_none_or(|(s, _)| *s != seq) {
-            hold.open = Some((seq, SegmentTyping::new(hold.any_text)));
+            let typing = if eager {
+                SegmentTyping::eager(hold.any_text)
+            } else {
+                SegmentTyping::new(hold.any_text)
+            };
+            hold.open = Some((seq, typing));
         }
         let Some((_, typing)) = hold.open.as_mut() else {
             return;

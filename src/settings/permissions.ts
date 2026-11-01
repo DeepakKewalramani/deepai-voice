@@ -7,11 +7,17 @@ export const PERMISSION_KINDS = [
   "inputMonitoring",
   "microphone",
 ] as const;
-export type PermissionKind = (typeof PERMISSION_KINDS)[number];
+/** Optional permission: shown when the backend reports it, never "missing". */
+export const SPEECH_KIND = "speechRecognition" as const;
+export type RequiredKind = (typeof PERMISSION_KINDS)[number];
+export type PermissionKind = RequiredKind | typeof SPEECH_KIND;
 
-export type PermissionsStatus = Record<PermissionKind, PermissionState> & {
+export type PermissionsStatus = Record<RequiredKind, PermissionState> & {
   /** True while macOS has not asked yet, so a prompt can be shown. */
   microphoneCanRequest: boolean;
+  /** Optional row; absent outside the app (no backend). */
+  speechRecognition?: PermissionState;
+  speechCanRequest?: boolean;
 };
 
 export const UNKNOWN_STATUS: PermissionsStatus = {
@@ -33,6 +39,10 @@ const copy: Record<PermissionKind, { title: string; why: string }> = {
   microphone: {
     title: "Microphone",
     why: "Needed to hear you.",
+  },
+  speechRecognition: {
+    title: "Speech Recognition",
+    why: "Optional. Types words as you speak, on this Mac. Without it, Whisper is used.",
   },
 };
 
@@ -62,7 +72,7 @@ export interface PermissionRow {
 }
 
 export function buildRows(status: PermissionsStatus): PermissionRow[] {
-  return PERMISSION_KINDS.map((kind) => ({
+  const rows: PermissionRow[] = PERMISSION_KINDS.map((kind) => ({
     kind,
     ...copy[kind],
     pill: pillFor(status[kind]),
@@ -71,6 +81,16 @@ export function buildRows(status: PermissionsStatus): PermissionRow[] {
       status.microphone !== "granted" &&
       status.microphoneCanRequest,
   }));
+  const speech = status.speechRecognition;
+  if (speech !== undefined) {
+    rows.push({
+      kind: SPEECH_KIND,
+      ...copy[SPEECH_KIND],
+      pill: pillFor(speech),
+      showRequest: speech !== "granted" && status.speechCanRequest === true,
+    });
+  }
+  return rows;
 }
 
 /** True when any permission is known to be missing. */
@@ -88,11 +108,17 @@ export function parseStatus(raw: unknown): PermissionsStatus {
     typeof v === "string" && STATES.includes(v)
       ? (v as PermissionState)
       : "unknown";
-  return {
+  const base: PermissionsStatus = {
     accessibility: state(r.accessibility),
     inputMonitoring: state(r.inputMonitoring),
     microphone: state(r.microphone),
     microphoneCanRequest: r.microphoneCanRequest === true,
+  };
+  if (r.speechRecognition === undefined) return base;
+  return {
+    ...base,
+    speechRecognition: state(r.speechRecognition),
+    speechCanRequest: r.speechCanRequest === true,
   };
 }
 

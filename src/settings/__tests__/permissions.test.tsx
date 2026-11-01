@@ -183,3 +183,50 @@ describe("Home permissions hint", () => {
     expect(renderToStaticMarkup(<App />)).not.toContain("Permissions needed");
   });
 });
+
+describe("Speech Recognition row (optional)", () => {
+  const withSpeech = (
+    s: "granted" | "needed" | "unknown",
+    canRequest: boolean,
+  ): PermissionsStatus => ({
+    ...all("granted"),
+    speechRecognition: s,
+    speechCanRequest: canRequest,
+  });
+  it("is the fourth row when the backend reports it", () => {
+    const rows = buildRows(withSpeech("granted", false));
+    expect(rows.map((r) => r.kind)).toEqual([
+      "accessibility",
+      "inputMonitoring",
+      "microphone",
+      "speechRecognition",
+    ]);
+    expect(rows[3].title).toBe("Speech Recognition");
+    expect(rows[3].showRequest).toBe(false);
+  });
+  it("offers Request access only while macOS has not asked", () => {
+    expect(buildRows(withSpeech("needed", true))[3].showRequest).toBe(true);
+    expect(buildRows(withSpeech("needed", false))[3].showRequest).toBe(false);
+    const m = list(withSpeech("needed", true));
+    expect(m).toContain("Open Speech Recognition in System Settings");
+    expect(m.match(/Request access/g)).toHaveLength(1);
+    expect(m).not.toContain("—");
+  });
+  it("is optional: never counts as missing", () => {
+    expect(missingRequired(withSpeech("needed", false))).toBe(false);
+  });
+  it("parses speech fields only when present", () => {
+    expect(
+      parseStatus({
+        ...all("granted"),
+        speechRecognition: "needed",
+        speechCanRequest: true,
+      }),
+    ).toEqual(withSpeech("needed", true));
+    expect(
+      parseStatus({ ...all("granted"), speechRecognition: "bogus" })
+        .speechRecognition,
+    ).toBe("unknown");
+    expect(parseStatus(all("granted"))).not.toHaveProperty("speechRecognition");
+  });
+});

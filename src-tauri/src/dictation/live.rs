@@ -3,6 +3,7 @@
 //! runs finals before partials. Audio stays in memory and is never logged.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use super::Outcome;
 use crate::stt::filters::{MIN_DURATION_SAMPLES, sanitize_transcript};
@@ -13,10 +14,18 @@ const FRAME: usize = SAMPLE_RATE / 50; // 20 ms
 const fn frames(ms: usize) -> usize {
     ms / 20
 }
-/// Frame RMS at or above this counts as voice (about -40 dBFS).
-pub const VOICE_RMS: f32 = 0.01;
-/// Voice needed before a segment opens.
-const ONSET_FRAMES: usize = frames(250);
+/// Lowest noise floor estimate (about -66 dBFS).
+pub const MIN_FLOOR: f32 = 0.0005;
+/// A frame is voice when its RMS is this many times the noise floor (+9 dB).
+pub const VOICE_MARGIN: f32 = 2.8;
+/// Voice threshold never goes below this (about -54 dBFS), so digital
+/// silence plus a click is not speech.
+pub const MIN_VOICE_RMS: f32 = 0.002;
+/// Per-frame rise of the floor estimate: about x e every 3 s. It drops at
+/// once to a quieter frame, so it tracks the quiet frames (a low percentile).
+const FLOOR_RISE: f32 = 1.0 / 150.0;
+/// Voice needed before a segment opens. 180 ms: a 150 ms blip stays ignored.
+const ONSET_FRAMES: usize = frames(180);
 /// Short dips inside the onset run do not reset it.
 const ONSET_GAP_FRAMES: usize = frames(160);
 /// Silence that ends a segment.
@@ -57,6 +66,7 @@ pub struct Segmenter {
     phase: Phase,
     frame: Vec<f32>,
     seq: u64,
+    gate: NoiseFloor,
 }
 
 impl Default for Segmenter {
@@ -73,17 +83,93 @@ fn waiting() -> Phase {
     }
 }
 
-fn frame_rms(f: &[f32]) -> f32 {
+pub fn frame_rms(f: &[f32]) -> f32 {
+    if f.is_empty() {
+        return 0.0;
+    }
     (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt()
+}
+
+/// Adaptive voice gate: tracks the room's noise floor from frame RMS and
+/// calls a frame voice when it is `VOICE_MARGIN` above it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoiseFloor {
+    floor: f32,
+}
+
+impl Default for NoiseFloor {
+    fn default() -> Self {
+        Self { floor: MIN_FLOOR }
+    }
+}
+
+impl NoiseFloor {
+    /// Starts from a floor learned earlier (for example the previous hold).
+    pub fn with_floor(floor: f32) -> Self {
+        Self {
+            floor: floor.max(MIN_FLOOR),
+        }
+    }
+
+    pub fn floor(&self) -> f32 {
+        self.floor
+    }
+
+    pub fn threshold(&self) -> f32 {
+        (self.floor * VOICE_MARGIN).max(MIN_VOICE_RMS)
+    }
+
+    /// Classifies one 20 ms frame, then updates the floor.
+    pub fn is_voice(&mut self, rms: f32) -> bool {
+        let voice = rms >= self.threshold();
+        self.floor = rms.min(self.floor * (1.0 + FLOOR_RISE)).max(MIN_FLOOR);
+        voice
+    }
+}
+
+/// A hold this long with no segment gets one whole-audio Whisper pass.
+pub const SAFETY_NET_MIN_SAMPLES: usize = SAMPLE_RATE * 2 / 5;
+/// RMS at or below this is digital silence: no safety net pass.
+pub const SAFETY_NET_MIN_RMS: f32 = 0.0001;
+
+/// True when the segmenter found no speech at all in a hold that lasted at
+/// least 0.4 s and is not pure digital silence.
+pub fn safety_net_wanted(segments: u64, audio: &[f32]) -> bool {
+    segments == 0 && audio.len() >= SAFETY_NET_MIN_SAMPLES && frame_rms(audio) > SAFETY_NET_MIN_RMS
+}
+
+/// Shortest gap between partial passes.
+pub const PARTIAL_MIN_GAP: Duration = Duration::from_millis(300);
+
+/// A new partial is due when `since_last` covers both the minimum gap and
+/// the cost of the last partial pass, so slow passes never pile up.
+pub fn partial_due(since_last: Duration, last_cost: Duration) -> bool {
+    since_last >= PARTIAL_MIN_GAP.max(last_cost)
 }
 
 impl Segmenter {
     pub fn new() -> Self {
+        Self::with_floor(MIN_FLOOR)
+    }
+
+    /// Starts with a noise floor learned in an earlier hold.
+    pub fn with_floor(floor: f32) -> Self {
         Self {
             phase: waiting(),
             frame: Vec::with_capacity(FRAME),
             seq: 0,
+            gate: NoiseFloor::with_floor(floor),
         }
+    }
+
+    /// Current noise floor estimate, to carry into the next hold.
+    pub fn floor(&self) -> f32 {
+        self.gate.floor()
+    }
+
+    /// Segments opened so far in this hold.
+    pub fn segments(&self) -> u64 {
+        self.seq
     }
 
     pub fn is_open(&self) -> bool {
@@ -108,7 +194,7 @@ impl Segmenter {
     }
 
     fn step(&mut self, frame: &[f32]) -> Option<Segment> {
-        let voice = frame_rms(frame) >= VOICE_RMS;
+        let voice = self.gate.is_voice(frame_rms(frame));
         match &mut self.phase {
             Phase::Waiting { lead, voiced, gap } => {
                 lead.extend(frame);
@@ -203,6 +289,8 @@ pub struct JobQueue {
     running: bool,
     /// Hold that queued jobs belong to.
     hold: u64,
+    /// How long the last partial pass took.
+    partial_cost: Duration,
 }
 
 impl JobQueue {
@@ -232,6 +320,15 @@ impl JobQueue {
 
     pub fn done(&mut self) {
         self.running = false;
+    }
+
+    /// Records the cost of a finished partial pass (adaptive cadence).
+    pub fn set_partial_cost(&mut self, cost: Duration) {
+        self.partial_cost = cost;
+    }
+
+    pub fn partial_cost(&self) -> Duration {
+        self.partial_cost
     }
 
     /// Nothing queued and nothing running.

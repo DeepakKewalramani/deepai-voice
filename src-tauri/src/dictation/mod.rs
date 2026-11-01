@@ -2,7 +2,14 @@
 //! filters -> typing at the cursor, with visible status in the tray title and
 //! window title and a live preview event for the UI.
 //!
-//! Live flow while the key is held: the recorder drains new audio every
+//! Engine per hold (`engine::choose_engine`): the on-device streaming engine
+//! when speech permission is granted and en-US runs on device, otherwise
+//! Whisper with a fixed reason in the log. Streaming flow: the recorder
+//! drains audio every 50 ms into the engine session (`stream_hold`); every
+//! word of a partial except its last one is typed at once, and each session
+//! final is reconciled with what was typed.
+//!
+//! Whisper flow while the key is held: the recorder drains new audio every
 //! 100 ms into the segmenter. About every 1.2 s, when Whisper is idle, the
 //! open segment is transcribed as a partial; words two partials agree on are
 //! typed right away. When a pause ends a segment (or the key is released),
@@ -19,8 +26,10 @@
 //! hotkey thread only sends a message. Dictated text and audio are never
 //! logged or written to disk.
 
+pub mod engine;
 pub mod live;
 pub mod state;
+pub mod stream_hold;
 pub mod stream_text;
 
 use std::path::{Path, PathBuf};
@@ -41,8 +50,11 @@ use crate::paste::PasteError;
 use crate::paste::typing::{EditError, EditOutcome, type_edit_checked};
 use crate::stt::filters::{sanitize_transcript, silence};
 use crate::stt::local_whisper::LocalWhisper;
+use crate::stt::streaming::StreamingStt;
+use engine::{EngineChoice, EngineSetting, Fallback};
 use live::{Job, JobQueue, Segmenter};
 use state::{DictationState, Effect, Input, Machine};
+use stream_hold::StreamHold;
 
 /// Id given to the tray icon so status updates can find it.
 pub const TRAY_ID: &str = "deepai-tray";
@@ -57,8 +69,10 @@ pub const ESCAPE_SHORTCUT: &str = "Escape";
 pub const PARTIAL_EVENT: &str = "dictation-partial";
 /// How often the recorder drains new audio while the key is held.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
-/// Minimum gap between partial passes.
-const PARTIAL_EVERY: Duration = Duration::from_millis(1200);
+/// Drain interval with the streaming engine, so partials show up quickly.
+const STREAM_DRAIN_EVERY: Duration = Duration::from_millis(50);
+/// Hold audio kept for the safety net pass (the 120 s recording cap).
+const MAX_HOLD_SAMPLES: usize = 120 * live::SAMPLE_RATE;
 /// Open segment audio needed before a partial is worth running.
 const PARTIAL_MIN_SAMPLES: usize = live::SAMPLE_RATE / 2;
 
@@ -207,80 +221,177 @@ fn with_jobs<T>(jobs: &SharedJobs, f: impl FnOnce(&mut JobQueue) -> T) -> T {
     out
 }
 
-/// One held key: the audio session plus the live segmenter.
+/// One held key: the audio session plus the live segmenter, or the
+/// streaming engine session when `stream` is set.
 struct Hold {
     session: AudioCaptureSession,
     segmenter: Segmenter,
     total_samples: usize,
     last_partial: Instant,
+    stream: Option<StreamHold>,
+    /// Whole hold audio (Whisper path, capped), for the safety net pass.
+    audio: Vec<f32>,
+    started: Instant,
+    /// Partial passes that were due but skipped because Whisper was busy.
+    skipped_busy: u32,
+}
+
+impl Hold {
+    fn new(session: AudioCaptureSession, floor: f32, stream: Option<StreamHold>) -> Self {
+        Self {
+            session,
+            segmenter: Segmenter::with_floor(floor),
+            total_samples: 0,
+            last_partial: Instant::now(),
+            stream,
+            audio: Vec::new(),
+            started: Instant::now(),
+            skipped_busy: 0,
+        }
+    }
+}
+
+fn send_all(inbox: &Sender<Input>, hold_id: u64, inputs: Vec<Input>) {
+    for input in inputs {
+        let _ = inbox.send(tag(hold_id, input));
+    }
 }
 
 impl Hold {
     fn feed(&mut self, samples: &[f32], jobs: &SharedJobs) {
         self.total_samples += samples.len();
+        let room = MAX_HOLD_SAMPLES.saturating_sub(self.audio.len());
+        self.audio
+            .extend_from_slice(&samples[..samples.len().min(room)]);
         for seg in self.segmenter.push(samples) {
             with_jobs(jobs, |q| q.push_final(seg.seq, seg.samples, false));
         }
     }
 
-    /// Queues a partial pass when it is time and Whisper is idle.
+    /// Queues a partial pass when it is due (`live::partial_due`, which
+    /// waits at least as long as the last pass took) and Whisper is idle:
+    /// never while a partial runs or a final is pending.
     fn maybe_partial(&mut self, jobs: &SharedJobs) {
-        if self.last_partial.elapsed() < PARTIAL_EVERY {
-            return;
-        }
         let Some((seq, audio)) = self.segmenter.open_audio() else {
             return;
         };
         if audio.len() < PARTIAL_MIN_SAMPLES {
             return;
         }
+        let since = self.last_partial.elapsed();
         let queued = with_jobs(jobs, |q| {
+            if !live::partial_due(since, q.partial_cost()) {
+                return None;
+            }
             if q.is_idle() {
                 q.push_partial(seq, audio);
-                true
+                Some(true)
             } else {
-                false
+                Some(false)
             }
         });
-        if queued {
-            self.last_partial = Instant::now();
+        match queued {
+            Some(true) => self.last_partial = Instant::now(),
+            Some(false) => self.skipped_busy += 1,
+            None => {}
         }
     }
 }
 
 /// Key released: drain the rest, then queue the open tail as the last final.
 /// A hold shorter than the minimum behaves as before (nothing to type).
-fn finish_hold(h: Hold, hold_id: u64, inbox: &Sender<Input>, jobs: &SharedJobs) {
+/// With the streaming engine, returns the hold's engine state while its
+/// final is still on the way.
+fn finish_hold(
+    h: Hold,
+    hold_id: u64,
+    inbox: &Sender<Input>,
+    jobs: &SharedJobs,
+) -> Option<StreamHold> {
     let Hold {
         session,
         mut segmenter,
         mut total_samples,
+        stream,
+        mut audio,
+        started,
+        skipped_busy,
         ..
     } = h;
-    let rest = match session.finish_live() {
+    let hold_ms = started.elapsed().as_millis();
+    let rest = session.finish_live();
+    if let Some(mut stream) = stream {
+        let inputs = match rest {
+            Ok(rest) if total_samples + rest.len() >= silence::MIN_DURATION_SAMPLES => {
+                stream.release(&rest)
+            }
+            // Too short to be speech: nothing to type, as with Whisper.
+            Ok(_) => {
+                stream.cancel();
+                vec![Input::Transcribed(Outcome::Nothing)]
+            }
+            Err(_) => {
+                stream.cancel();
+                vec![Input::Transcribed(Outcome::Failed(
+                    "Recording failed".into(),
+                ))]
+            }
+        };
+        send_all(inbox, hold_id, inputs);
+        return (!stream.is_done()).then_some(stream);
+    }
+    let rest = match rest {
         Ok(rest) => rest,
         Err(_) => {
             let _ = inbox.send(tag(
                 hold_id,
                 Input::Transcribed(Outcome::Failed("Recording failed".into())),
             ));
-            return;
+            return None;
         }
     };
     total_samples += rest.len();
+    let room = MAX_HOLD_SAMPLES.saturating_sub(audio.len());
+    audio.extend_from_slice(&rest[..rest.len().min(room)]);
     let finished = segmenter.push(&rest);
     let tail = segmenter.flush();
     let too_short = total_samples < silence::MIN_DURATION_SAMPLES;
+    // Diagnostics: event names and numbers only, never text or audio.
+    if skipped_busy > 0 {
+        tracing::info!(
+            "dictation event=partial_skipped_busy count={} hold_ms={}",
+            skipped_busy,
+            hold_ms
+        );
+    }
+    let segments = segmenter.segments();
+    if segments == 0 {
+        tracing::info!(
+            "dictation event=hold_no_segment hold_ms={} audio_ms={}",
+            hold_ms,
+            audio.len() * 1000 / live::SAMPLE_RATE
+        );
+    }
+    let safety_net = live::safety_net_wanted(segments, &audio);
+    if safety_net {
+        tracing::info!(
+            "dictation event=safety_net_used audio_ms={}",
+            audio.len() * 1000 / live::SAMPLE_RATE
+        );
+    }
     with_jobs(jobs, |q| {
         for seg in finished {
             q.push_final(seg.seq, seg.samples, false);
         }
         let (seq, samples) = match tail {
             Some(t) if !too_short => (t.seq, t.samples),
+            // No speech found by the segmenter: transcribe the whole hold.
+            _ if safety_net => (1, audio),
             _ => (u64::MAX, Vec::new()),
         };
         q.push_final(seq, samples, true);
     });
+    None
 }
 
 fn tag(hold: u64, input: Input) -> Input {
@@ -290,13 +401,97 @@ fn tag(hold: u64, input: Input) -> Input {
     }
 }
 
+/// Engine choice kept by the recorder thread across holds.
+struct EnginePicker {
+    setting: EngineSetting,
+    /// Speech permission was requested in this run.
+    asked: bool,
+    engine: Option<Arc<dyn StreamingStt>>,
+}
+
+impl EnginePicker {
+    fn new() -> Self {
+        let value = std::env::var(engine::ENGINE_ENV).ok();
+        #[cfg(target_os = "macos")]
+        let engine: Option<Arc<dyn StreamingStt>> =
+            Some(Arc::new(crate::stt::apple_speech::AppleSpeech::new()));
+        #[cfg(not(target_os = "macos"))]
+        let engine: Option<Arc<dyn StreamingStt>> = None;
+        Self {
+            setting: EngineSetting::from_env_value(value.as_deref()),
+            asked: false,
+            engine,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn choose(&mut self) -> EngineChoice {
+        use crate::stt::apple_speech::{
+            OnDeviceProbe, SfSpeechPermission, SpeechPermissionProvider, SystemOnDeviceProbe,
+        };
+        let permission = SfSpeechPermission.status();
+        // Asking is only safe from the bundled app (it has the usage string).
+        let bundled = std::env::current_exe()
+            .ok()
+            .and_then(|e| crate::autostart::bundle_path(&e))
+            .is_some();
+        if engine::should_request_permission(self.setting, permission, bundled, self.asked) {
+            self.asked = true;
+            SfSpeechPermission.request(Box::new(|_| {}));
+        }
+        engine::choose_engine(self.setting, permission, || {
+            SystemOnDeviceProbe.support(engine::STREAM_LOCALE)
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn choose(&mut self) -> EngineChoice {
+        engine::choose_engine(
+            self.setting,
+            crate::stt::apple_speech::SpeechPermissionStatus::Denied,
+            || crate::stt::apple_speech::LocaleSupport::NotSupported,
+        )
+    }
+
+    /// Streaming state for a new hold, or None for Whisper. The reason for
+    /// Whisper is logged as a fixed string.
+    fn start_stream(&mut self) -> Option<StreamHold> {
+        let reason = match (self.choose(), self.engine.clone()) {
+            (EngineChoice::Streaming, Some(engine)) => {
+                match StreamHold::start(engine, engine::STREAM_LOCALE) {
+                    Ok(stream) => {
+                        tracing::info!("dictation engine=streaming");
+                        return Some(stream);
+                    }
+                    Err(_) => Fallback::StartFailed,
+                }
+            }
+            (EngineChoice::Streaming, None) => Fallback::NotOnDevice,
+            (EngineChoice::Whisper(reason), _) => reason,
+        };
+        tracing::info!("dictation engine=whisper reason=\"{}\"", reason.status());
+        None
+    }
+}
+
 fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs) {
     let mut hold: Option<Hold> = None;
     let mut hold_id = 0;
     let mut last_error: Option<String> = None;
+    // Streaming engine of a released hold whose final is still on the way.
+    let mut finishing: Option<StreamHold> = None;
+    let mut picker = EnginePicker::new();
+    // Noise floor learned in earlier holds, so a noisy room is known at once.
+    let mut noise_floor = live::MIN_FLOOR;
     loop {
-        let cmd = if hold.is_some() {
-            match rx.recv_timeout(DRAIN_EVERY) {
+        let streaming = finishing.is_some() || hold.as_ref().is_some_and(|h| h.stream.is_some());
+        let cmd = if hold.is_some() || finishing.is_some() {
+            let every = if streaming {
+                STREAM_DRAIN_EVERY
+            } else {
+                DRAIN_EVERY
+            };
+            match rx.recv_timeout(every) {
                 Ok(cmd) => Some(cmd),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -311,16 +506,31 @@ fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs)
             None => {
                 if let Some(h) = hold.as_mut() {
                     match h.session.drain_16k() {
-                        Ok(samples) => {
-                            h.feed(&samples, &jobs);
-                            h.maybe_partial(&jobs);
-                        }
+                        Ok(samples) => match h.stream.as_mut() {
+                            Some(stream) => {
+                                h.total_samples += samples.len();
+                                send_all(&inbox, hold_id, stream.feed(&samples));
+                            }
+                            None => {
+                                h.feed(&samples, &jobs);
+                                h.maybe_partial(&jobs);
+                            }
+                        },
                         Err(_) => last_error = Some("Recording failed".into()),
+                    }
+                }
+                if let Some(stream) = finishing.as_mut() {
+                    send_all(&inbox, hold_id, stream.poll());
+                    if stream.is_done() {
+                        finishing = None;
                     }
                 }
             }
             Some(RecCmd::Start(id)) => {
                 hold = None;
+                if let Some(mut old) = finishing.take() {
+                    old.cancel();
+                }
                 hold_id = id;
                 last_error = None;
                 with_jobs(&jobs, |q| q.begin_hold(id));
@@ -328,12 +538,9 @@ fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs)
                     MicGate::Go => {
                         match AudioCaptureSession::start(AudioCaptureConfig::default()) {
                             Ok(session) => {
-                                hold = Some(Hold {
-                                    session,
-                                    segmenter: Segmenter::new(),
-                                    total_samples: 0,
-                                    last_partial: Instant::now(),
-                                })
+                                // Capture runs first, so no audio is lost
+                                // while the engine starts.
+                                hold = Some(Hold::new(session, noise_floor, picker.start_stream()))
                             }
                             Err(_) => last_error = Some("Mic unavailable".into()),
                         }
@@ -349,14 +556,25 @@ fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs)
                 }
             }
             Some(RecCmd::Stop) => match hold.take() {
-                Some(h) => finish_hold(h, hold_id, &inbox, &jobs),
+                Some(h) => {
+                    if h.stream.is_none() {
+                        noise_floor = h.segmenter.floor();
+                    }
+                    finishing = finish_hold(h, hold_id, &inbox, &jobs)
+                }
                 None => {
                     let msg = last_error.clone().unwrap_or_else(|| "No recording".into());
                     let _ = inbox.send(tag(hold_id, Input::StartFailed(msg)));
                 }
             },
             Some(RecCmd::Discard) => {
-                hold = None;
+                // Esc or discard: engine sessions stop, nothing more is sent.
+                if let Some(mut stream) = hold.take().and_then(|h| h.stream) {
+                    stream.cancel();
+                }
+                if let Some(mut stream) = finishing.take() {
+                    stream.cancel();
+                }
                 with_jobs(&jobs, |q| q.clear());
             }
         }
@@ -405,10 +623,22 @@ fn whisper_thread(jobs: SharedJobs, inbox: Sender<Input>) {
                     Some(Input::Segment { seq, outcome })
                 }
             }
-            Job::Partial { seq, samples } => match live::process_segment(&samples, transcribe) {
-                Outcome::Text(text) => Some(Input::Partial { seq, text }),
-                _ => None,
-            },
+            Job::Partial { seq, samples } => {
+                let started = Instant::now();
+                // Reduced audio context: much cheaper for short audio.
+                let fast = |s: &[f32]| {
+                    ensure_model(&mut model)?
+                        .transcribe_partial(s)
+                        .map_err(|_| "Transcription failed".to_string())
+                };
+                let outcome = live::process_segment(&samples, fast);
+                let cost = started.elapsed();
+                with_jobs(&jobs, |q| q.set_partial_cost(cost));
+                match outcome {
+                    Outcome::Text(text) => Some(Input::Partial { seq, text }),
+                    _ => None,
+                }
+            }
         };
         with_jobs(&jobs, |q| q.done());
         if let Some(input) = input {

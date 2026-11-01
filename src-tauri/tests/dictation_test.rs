@@ -950,3 +950,110 @@ fn escape_shortcut_parses_and_is_kept_apart_from_the_talk_key() {
     assert!(!is_escape(&parse("Ctrl+Option+Space").unwrap()));
     assert!(!is_escape(&parse("Shift+Escape").unwrap()));
 }
+
+// ---------- 2.12 reliability: adaptive segmenter, safety net, partial cost ----------
+
+use deepai_voice_lib::dictation::live::{
+    NoiseFloor, PARTIAL_MIN_GAP, partial_due, safety_net_wanted,
+};
+use std::time::Duration;
+
+/// Deterministic white noise with peak `amp`.
+fn noise(len_ms: usize, amp: f32, seed: u32) -> Vec<f32> {
+    let mut x = seed.max(1);
+    (0..ms(len_ms))
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            ((x as f32 / u32::MAX as f32) * 2.0 - 1.0) * amp
+        })
+        .collect()
+}
+
+fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+    a.iter().zip(b).map(|(x, y)| x + y).collect()
+}
+
+/// Quiet speech: a tone with RMS about 0.004, under the old fixed 0.01 gate.
+fn quiet_voice(len_ms: usize) -> Vec<f32> {
+    (0..ms(len_ms))
+        .map(|i| (i as f32 * 0.07).sin() * 0.006)
+        .collect()
+}
+
+#[test]
+fn segmenter_hears_quiet_speech_over_a_quiet_room() {
+    let mut s = Segmenter::new();
+    assert!(s.push(&noise(1000, 0.001, 7)).is_empty());
+    assert!(!s.is_open());
+    let speech = mix(&quiet_voice(1500), &noise(1500, 0.001, 9));
+    s.push(&speech);
+    assert!(s.is_open(), "quiet speech must open a segment");
+    let done = s.push(&noise(800, 0.001, 11));
+    assert_eq!(done.len(), 1);
+}
+
+#[test]
+fn segmenter_learns_loud_steady_noise_and_stops_opening() {
+    let mut s = Segmenter::new();
+    // A fresh segmenter adapts within seconds; after that the noise is not voice.
+    s.push(&noise(15_000, 0.08, 3));
+    s.flush();
+    let mut done = s.push(&noise(5_000, 0.08, 5));
+    done.extend(s.flush());
+    assert!(
+        done.is_empty(),
+        "steady noise opened {} segments",
+        done.len()
+    );
+    // A segmenter that carries the learned floor rejects the noise at once.
+    let mut next = Segmenter::with_floor(s.floor());
+    let mut d = next.push(&noise(3_000, 0.08, 13));
+    d.extend(next.flush());
+    assert!(d.is_empty());
+    // Speech well above the noise still opens.
+    let loud = mix(&voice(1000), &noise(1000, 0.08, 17));
+    next.push(&loud);
+    assert!(next.is_open());
+}
+
+#[test]
+fn noise_floor_has_a_sane_minimum_and_rises_slowly() {
+    let mut f = NoiseFloor::default();
+    for _ in 0..50 {
+        assert!(!f.is_voice(0.0));
+    }
+    // Digital silence never makes a tiny click count as speech.
+    assert!(!f.is_voice(0.001));
+    assert!(f.is_voice(0.01));
+    // One second of loud frames does not teach the floor that level yet.
+    for _ in 0..50 {
+        f.is_voice(0.1);
+    }
+    assert!(f.is_voice(0.1));
+}
+
+#[test]
+fn safety_net_runs_only_for_a_real_hold_without_segments() {
+    let speech = mix(&quiet_voice(600), &noise(600, 0.0005, 2));
+    assert!(safety_net_wanted(0, &speech));
+    // Segments were found: the normal path handles it.
+    assert!(!safety_net_wanted(1, &speech));
+    // Shorter than 0.4 s.
+    assert!(!safety_net_wanted(0, &quiet_voice(300)));
+    // Pure digital silence.
+    assert!(!safety_net_wanted(0, &quiet(2000)));
+}
+
+#[test]
+fn partials_wait_for_the_last_partial_cost_with_a_floor() {
+    assert_eq!(PARTIAL_MIN_GAP, Duration::from_millis(300));
+    let ms = Duration::from_millis;
+    // Cheap partials: every 300 ms.
+    assert!(!partial_due(ms(299), ms(100)));
+    assert!(partial_due(ms(300), ms(100)));
+    // Slow partials space themselves out by their own cost.
+    assert!(!partial_due(ms(900), ms(1500)));
+    assert!(partial_due(ms(1500), ms(1500)));
+}

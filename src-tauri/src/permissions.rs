@@ -13,13 +13,16 @@ pub enum PermissionKind {
     Accessibility,
     InputMonitoring,
     Microphone,
+    /// Optional: on-device live typing. Without it dictation uses Whisper.
+    SpeechRecognition,
 }
 
 impl PermissionKind {
-    pub const ALL: [PermissionKind; 3] = [
+    pub const ALL: [PermissionKind; 4] = [
         PermissionKind::Accessibility,
         PermissionKind::InputMonitoring,
         PermissionKind::Microphone,
+        PermissionKind::SpeechRecognition,
     ];
 
     /// Parses the id the frontend sends. Anything else is rejected.
@@ -28,6 +31,7 @@ impl PermissionKind {
             "accessibility" => Some(Self::Accessibility),
             "inputMonitoring" => Some(Self::InputMonitoring),
             "microphone" => Some(Self::Microphone),
+            "speechRecognition" => Some(Self::SpeechRecognition),
             _ => None,
         }
     }
@@ -37,12 +41,13 @@ impl PermissionKind {
             Self::Accessibility => "accessibility",
             Self::InputMonitoring => "inputMonitoring",
             Self::Microphone => "microphone",
+            Self::SpeechRecognition => "speechRecognition",
         }
     }
 
     /// Whether the app can ask macOS to show the access prompt for this kind.
     pub fn can_prompt(self) -> bool {
-        matches!(self, Self::Microphone)
+        matches!(self, Self::Microphone | Self::SpeechRecognition)
     }
 }
 
@@ -57,6 +62,9 @@ pub fn pane_url(kind: PermissionKind) -> &'static str {
         }
         PermissionKind::Microphone => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        PermissionKind::SpeechRecognition => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
         }
     }
 }
@@ -79,6 +87,9 @@ pub struct PermissionsStatus {
     pub microphone: PermissionState,
     /// True when macOS has not asked yet, so "Request access" can show the prompt.
     pub microphone_can_request: bool,
+    /// Optional permission; never counts as missing in the UI.
+    pub speech_recognition: PermissionState,
+    pub speech_can_request: bool,
 }
 
 impl PermissionsStatus {
@@ -87,6 +98,8 @@ impl PermissionsStatus {
         input_monitoring: PermissionState::Unknown,
         microphone: PermissionState::Unknown,
         microphone_can_request: false,
+        speech_recognition: PermissionState::Unknown,
+        speech_can_request: false,
     };
 }
 
@@ -106,17 +119,27 @@ fn from_tri(granted: bool, undetermined: bool) -> (PermissionState, bool) {
 #[cfg(target_os = "macos")]
 fn read_status() -> PermissionsStatus {
     use crate::audio::{MicPermissionStatus, check_microphone_permission};
+    use crate::stt::apple_speech::{
+        SfSpeechPermission, SpeechPermissionProvider, SpeechPermissionStatus,
+    };
 
     let mic = check_microphone_permission();
     let (microphone, microphone_can_request) = from_tri(
         mic == MicPermissionStatus::Granted,
         mic == MicPermissionStatus::Undetermined,
     );
+    let speech = SfSpeechPermission.status();
+    let (speech_recognition, speech_can_request) = from_tri(
+        speech == SpeechPermissionStatus::Granted,
+        speech == SpeechPermissionStatus::Undetermined,
+    );
     PermissionsStatus {
         accessibility: from_bool(crate::paste::macos::is_accessibility_trusted()),
         input_monitoring: from_bool(crate::hotkey::macos::has_permission()),
         microphone,
         microphone_can_request,
+        speech_recognition,
+        speech_can_request,
     }
 }
 
@@ -156,25 +179,44 @@ fn open_url(_url: &'static str) -> Result<(), String> {
     Err("System Settings is only available on macOS".into())
 }
 
-/// Asks macOS to show the microphone prompt. macOS shows it only while the permission is
-/// not decided; the UI polls for the result.
+/// Asks macOS to show the microphone or speech recognition prompt. macOS shows it only
+/// while the permission is not decided; the UI polls for the result.
 #[tauri::command]
 pub fn request_permission(kind: String) -> Result<(), String> {
     let kind = PermissionKind::from_id(&kind).ok_or("unknown permission")?;
     if !kind.can_prompt() {
         return Err("this permission is granted in System Settings".into());
     }
-    prompt()
+    prompt(kind)
+}
+
+/// True when this process runs from the installed `.app` bundle.
+fn is_bundled() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| crate::autostart::bundle_path(&e))
+        .is_some()
 }
 
 #[cfg(target_os = "macos")]
-fn prompt() -> Result<(), String> {
+fn prompt(kind: PermissionKind) -> Result<(), String> {
+    use crate::stt::apple_speech::{SfSpeechPermission, SpeechPermissionProvider};
+    if kind == PermissionKind::SpeechRecognition {
+        // The OS ends a process that asks without the usage string, which only the
+        // bundled app has.
+        if !is_bundled() {
+            return Err("speech access can only be requested from the installed app".into());
+        }
+        SfSpeechPermission.request(Box::new(|_| {}));
+        return Ok(());
+    }
     crate::audio::request_microphone_permission(Box::new(|_| {}));
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
-fn prompt() -> Result<(), String> {
+fn prompt(_kind: PermissionKind) -> Result<(), String> {
+    let _ = is_bundled();
     Err("permission prompts are only available on macOS".into())
 }
 
@@ -191,7 +233,7 @@ mod tests {
             "",
             "Accessibility",
             "camera",
-            "speechRecognition",
+            "speech",
             "microphone; rm -rf /",
             "x-apple",
         ] {
@@ -213,6 +255,10 @@ mod tests {
         assert_eq!(
             pane_url(PermissionKind::Microphone),
             format!("{base}Privacy_Microphone")
+        );
+        assert_eq!(
+            pane_url(PermissionKind::SpeechRecognition),
+            format!("{base}Privacy_SpeechRecognition")
         );
     }
 
@@ -245,6 +291,13 @@ mod tests {
     }
 
     #[test]
+    fn speech_can_prompt_but_never_from_an_unbundled_binary() {
+        assert!(PermissionKind::SpeechRecognition.can_prompt());
+        // The test binary is not inside a .app, so the OS prompt is never reached.
+        assert!(request_permission("speechRecognition".into()).is_err());
+    }
+
+    #[test]
     fn tri_state_maps_to_state_and_request_flag() {
         assert_eq!(from_tri(true, false), (PermissionState::Granted, false));
         assert_eq!(from_tri(false, true), (PermissionState::Needed, true));
@@ -265,7 +318,9 @@ mod tests {
                 "accessibility": "granted",
                 "inputMonitoring": "needed",
                 "microphone": "unknown",
-                "microphoneCanRequest": false
+                "microphoneCanRequest": false,
+                "speechRecognition": "unknown",
+                "speechCanRequest": false
             })
         );
     }
