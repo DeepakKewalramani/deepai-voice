@@ -6,7 +6,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 
 use super::meter::calculate_rms_db;
-use super::resample::{downmix_to_mono, resample_to_16k};
+use super::resample::{StreamResampler16k, downmix_to_mono, resample_to_16k};
 
 /// Configuration parameters for audio capture.
 #[derive(Debug, Clone)]
@@ -97,6 +97,57 @@ impl InMemoryAudioBuffer {
 
     pub fn samples(&self) -> &[f32] {
         &self.samples
+    }
+}
+
+/// Turns raw native-rate chunks into 16 kHz mono as they arrive, with the
+/// same transient discard and length cap as `stop()`. Memory stays bounded:
+/// output is handed out on every call, nothing is accumulated.
+pub struct LiveDrain {
+    channels: u16,
+    resampler: StreamResampler16k,
+    transient_left: usize,
+    room_left: usize,
+}
+
+impl LiveDrain {
+    pub fn new(
+        sample_rate: u32,
+        channels: u16,
+        config: AudioCaptureConfig,
+    ) -> Result<Self, String> {
+        if channels == 0 {
+            return Err("Channel count must be greater than 0".to_string());
+        }
+        let probe = InMemoryAudioBuffer::new(16000, config);
+        Ok(Self {
+            channels,
+            resampler: StreamResampler16k::new(sample_rate)?,
+            transient_left: probe.transient_samples_to_discard,
+            room_left: probe.max_samples,
+        })
+    }
+
+    fn limit(&mut self, mut out: Vec<f32>) -> Vec<f32> {
+        let skip = self.transient_left.min(out.len());
+        self.transient_left -= skip;
+        out.drain(..skip);
+        out.truncate(self.room_left);
+        self.room_left -= out.len();
+        out
+    }
+
+    /// Feeds one raw interleaved chunk; returns the new 16 kHz samples.
+    pub fn push(&mut self, raw: &[f32]) -> Result<Vec<f32>, String> {
+        let mono = downmix_to_mono(raw, self.channels)?;
+        let out = self.resampler.push(&mono)?;
+        Ok(self.limit(out))
+    }
+
+    /// Returns the last samples held inside the resampler.
+    pub fn finish(&mut self) -> Result<Vec<f32>, String> {
+        let out = self.resampler.finish()?;
+        Ok(self.limit(out))
     }
 }
 
@@ -269,6 +320,7 @@ pub struct AudioCaptureSession {
     sample_rate: u32,
     channels: u16,
     config: AudioCaptureConfig,
+    live: Option<LiveDrain>,
 }
 
 impl AudioCaptureSession {
@@ -366,7 +418,40 @@ impl AudioCaptureSession {
             sample_rate,
             channels,
             config,
+            live: None,
         })
+    }
+
+    /// Live mode: 16 kHz mono samples recorded since the last call. Once used,
+    /// end the session with `finish_live`, not `stop`.
+    pub fn drain_16k(&mut self) -> Result<Vec<f32>, String> {
+        if self.live.is_none() {
+            self.live = Some(LiveDrain::new(
+                self.sample_rate,
+                self.channels,
+                self.config.clone(),
+            )?);
+        }
+        let mut out = Vec::new();
+        while let Ok(chunk) = self.receiver.try_recv() {
+            if let Some(live) = self.live.as_mut() {
+                out.extend(live.push(&chunk)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Stops a live session and returns the samples not drained yet.
+    pub fn finish_live(mut self) -> Result<Vec<f32>, String> {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(stream) = self.stream.take() {
+            let _ = stream.pause();
+        }
+        let mut out = self.drain_16k()?;
+        if let Some(live) = self.live.as_mut() {
+            out.extend(live.finish()?);
+        }
+        Ok(out)
     }
 
     /// Stops audio capture and returns 16 kHz mono float PCM samples held strictly in memory.

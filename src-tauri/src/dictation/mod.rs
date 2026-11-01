@@ -1,16 +1,33 @@
-//! Dictation orchestrator: hotkey actions -> record -> Whisper -> filters ->
-//! paste, with visible status in the tray title and window title.
+//! Dictation orchestrator: hotkey actions -> live record -> Whisper ->
+//! filters -> typing at the cursor, with visible status in the tray title and
+//! window title and a live preview event for the UI.
+//!
+//! Live flow while the key is held: the recorder drains new audio every
+//! 100 ms into the segmenter. About every 1.2 s, when Whisper is idle, the
+//! open segment is transcribed as a partial; words two partials agree on are
+//! typed right away. When a pause ends a segment (or the key is released),
+//! its final text is reconciled with what was typed.
+//!
+//! Text is only ever typed with key events, never put on the clipboard.
+//! Every hold gets an id; worker results carry it so a late result of an
+//! earlier hold is dropped. Before every key action a focus guard checks the
+//! frontmost app, user input and secure fields (`crate::focus`).
 //!
 //! Threads: one orchestrator thread owns the state machine; a recorder
 //! thread owns the (non-Send) audio session; a Whisper thread owns the model,
-//! loaded lazily on first use; paste runs on a short-lived thread. The hotkey
-//! thread only sends a message. Dictated text and audio are never logged.
+//! loaded lazily on first use; one typing thread runs edits in order. The
+//! hotkey thread only sends a message. Dictated text and audio are never
+//! logged or written to disk.
 
+pub mod live;
 pub mod state;
+pub mod stream_text;
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -18,18 +35,32 @@ use crate::audio::{
     AudioCaptureConfig, AudioCaptureSession, MicPermissionStatus, check_microphone_permission,
     request_microphone_permission,
 };
+use crate::focus::{FocusProbe, Gate, ProbeGuard, Snapshot, StopReason, SystemProbe, TypingGuard};
 use crate::hotkey::HotkeyAction;
-use crate::paste::{PasteError, paste_text_with_delay};
+use crate::paste::PasteError;
+use crate::paste::typing::{EditError, EditOutcome, type_edit_checked};
 use crate::stt::filters::{sanitize_transcript, silence};
 use crate::stt::local_whisper::LocalWhisper;
-use state::{Effect, Input, Machine};
+use live::{Job, JobQueue, Segmenter};
+use state::{DictationState, Effect, Input, Machine};
 
 /// Id given to the tray icon so status updates can find it.
 pub const TRAY_ID: &str = "deepai-tray";
 const WINDOW_BASE_TITLE: &str = "DeepAI Voice";
 const MODEL_FILE: &str = "models/ggml-base.en.bin";
-const PASTE_SETTLE_MS: u64 = 120;
 const ERROR_VISIBLE: Duration = Duration::from_secs(5);
+/// How long "Cancelled" stays visible after Esc.
+const CANCEL_VISIBLE: Duration = Duration::from_millis(1500);
+/// Global shortcut that cancels the active hold.
+pub const ESCAPE_SHORTCUT: &str = "Escape";
+/// Event with the live preview text (empty clears it).
+pub const PARTIAL_EVENT: &str = "dictation-partial";
+/// How often the recorder drains new audio while the key is held.
+const DRAIN_EVERY: Duration = Duration::from_millis(100);
+/// Minimum gap between partial passes.
+const PARTIAL_EVERY: Duration = Duration::from_millis(1200);
+/// Open segment audio needed before a partial is worth running.
+const PARTIAL_MIN_SAMPLES: usize = live::SAMPLE_RATE / 2;
 
 /// Result of turning recorded audio into text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,11 +87,11 @@ pub fn mic_gate(status: MicPermissionStatus) -> MicGate {
     }
 }
 
-/// Status text for a failed paste. The text is already in last dictation.
+/// Fixed status text for failed typing. Nothing was copied anywhere.
 pub fn paste_error_status(err: &PasteError) -> String {
     match err {
-        PasteError::AccessibilityDenied => "Copied: paste blocked (Accessibility)".into(),
-        _ => "Copied: paste failed".into(),
+        PasteError::AccessibilityDenied => "Accessibility needed".into(),
+        PasteError::InjectFailed(_) => "Typing failed".into(),
     }
 }
 
@@ -106,38 +137,204 @@ pub fn process_audio(
 
 /// Runs the machine over `rx`. Publishes status when the state changes and
 /// hands each effect to `run`. Returns when `rx` closes.
-pub fn drive(rx: Receiver<Input>, mut status: impl FnMut(&str), mut run: impl FnMut(Effect)) {
+pub fn drive(rx: Receiver<Input>, status: impl FnMut(&str), run: impl FnMut(Effect)) {
+    drive_live(rx, status, |_| {}, run);
+}
+
+/// Like `drive`, also publishing the live preview text whenever it changes.
+pub fn drive_live(
+    rx: Receiver<Input>,
+    status: impl FnMut(&str),
+    partial: impl FnMut(&str),
+    run: impl FnMut(Effect),
+) {
+    drive_live_with(rx, status, partial, run, |_| {});
+}
+
+/// Esc is registered as a global shortcut only while a hold is active:
+/// recording, thinking, or typing the last words.
+pub fn escape_wanted(state: &DictationState) -> bool {
+    matches!(
+        state,
+        DictationState::Recording | DictationState::Transcribing | DictationState::Pasting
+    )
+}
+
+/// Like `drive_live`, also reporting every state change to `on_state`.
+pub fn drive_live_with(
+    rx: Receiver<Input>,
+    mut status: impl FnMut(&str),
+    mut partial: impl FnMut(&str),
+    mut run: impl FnMut(Effect),
+    mut on_state: impl FnMut(&DictationState),
+) {
     let mut machine = Machine::new();
     for input in rx {
         let before = machine.state().clone();
+        let before_partial = machine.partial().to_string();
         let effect = machine.handle(input);
         if *machine.state() != before {
             status(&machine.status_text());
+            on_state(machine.state());
+        }
+        if machine.partial() != before_partial {
+            partial(machine.partial());
         }
         if let Some(effect) = effect {
+            run(effect);
+        }
+        while let Some(effect) = machine.take_followup() {
             run(effect);
         }
     }
 }
 
 enum RecCmd {
-    Start,
+    /// Start hold `id`.
+    Start(u64),
     Stop,
     Discard,
 }
 
-fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, whisper: Sender<Vec<f32>>) {
-    let mut session: Option<AudioCaptureSession> = None;
+/// Whisper job queue shared by the recorder (producer) and Whisper thread.
+type SharedJobs = Arc<(Mutex<JobQueue>, Condvar)>;
+
+fn with_jobs<T>(jobs: &SharedJobs, f: impl FnOnce(&mut JobQueue) -> T) -> T {
+    let (lock, cvar) = &**jobs;
+    let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let out = f(&mut q);
+    cvar.notify_all();
+    out
+}
+
+/// One held key: the audio session plus the live segmenter.
+struct Hold {
+    session: AudioCaptureSession,
+    segmenter: Segmenter,
+    total_samples: usize,
+    last_partial: Instant,
+}
+
+impl Hold {
+    fn feed(&mut self, samples: &[f32], jobs: &SharedJobs) {
+        self.total_samples += samples.len();
+        for seg in self.segmenter.push(samples) {
+            with_jobs(jobs, |q| q.push_final(seg.seq, seg.samples, false));
+        }
+    }
+
+    /// Queues a partial pass when it is time and Whisper is idle.
+    fn maybe_partial(&mut self, jobs: &SharedJobs) {
+        if self.last_partial.elapsed() < PARTIAL_EVERY {
+            return;
+        }
+        let Some((seq, audio)) = self.segmenter.open_audio() else {
+            return;
+        };
+        if audio.len() < PARTIAL_MIN_SAMPLES {
+            return;
+        }
+        let queued = with_jobs(jobs, |q| {
+            if q.is_idle() {
+                q.push_partial(seq, audio);
+                true
+            } else {
+                false
+            }
+        });
+        if queued {
+            self.last_partial = Instant::now();
+        }
+    }
+}
+
+/// Key released: drain the rest, then queue the open tail as the last final.
+/// A hold shorter than the minimum behaves as before (nothing to type).
+fn finish_hold(h: Hold, hold_id: u64, inbox: &Sender<Input>, jobs: &SharedJobs) {
+    let Hold {
+        session,
+        mut segmenter,
+        mut total_samples,
+        ..
+    } = h;
+    let rest = match session.finish_live() {
+        Ok(rest) => rest,
+        Err(_) => {
+            let _ = inbox.send(tag(
+                hold_id,
+                Input::Transcribed(Outcome::Failed("Recording failed".into())),
+            ));
+            return;
+        }
+    };
+    total_samples += rest.len();
+    let finished = segmenter.push(&rest);
+    let tail = segmenter.flush();
+    let too_short = total_samples < silence::MIN_DURATION_SAMPLES;
+    with_jobs(jobs, |q| {
+        for seg in finished {
+            q.push_final(seg.seq, seg.samples, false);
+        }
+        let (seq, samples) = match tail {
+            Some(t) if !too_short => (t.seq, t.samples),
+            _ => (u64::MAX, Vec::new()),
+        };
+        q.push_final(seq, samples, true);
+    });
+}
+
+fn tag(hold: u64, input: Input) -> Input {
+    Input::FromHold {
+        hold,
+        input: Box::new(input),
+    }
+}
+
+fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs) {
+    let mut hold: Option<Hold> = None;
+    let mut hold_id = 0;
     let mut last_error: Option<String> = None;
-    for cmd in rx {
+    loop {
+        let cmd = if hold.is_some() {
+            match rx.recv_timeout(DRAIN_EVERY) {
+                Ok(cmd) => Some(cmd),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match rx.recv() {
+                Ok(cmd) => Some(cmd),
+                Err(_) => return,
+            }
+        };
         match cmd {
-            RecCmd::Start => {
-                session = None;
+            None => {
+                if let Some(h) = hold.as_mut() {
+                    match h.session.drain_16k() {
+                        Ok(samples) => {
+                            h.feed(&samples, &jobs);
+                            h.maybe_partial(&jobs);
+                        }
+                        Err(_) => last_error = Some("Recording failed".into()),
+                    }
+                }
+            }
+            Some(RecCmd::Start(id)) => {
+                hold = None;
+                hold_id = id;
                 last_error = None;
+                with_jobs(&jobs, |q| q.begin_hold(id));
                 match mic_gate(check_microphone_permission()) {
                     MicGate::Go => {
                         match AudioCaptureSession::start(AudioCaptureConfig::default()) {
-                            Ok(s) => session = Some(s),
+                            Ok(session) => {
+                                hold = Some(Hold {
+                                    session,
+                                    segmenter: Segmenter::new(),
+                                    total_samples: 0,
+                                    last_partial: Instant::now(),
+                                })
+                            }
                             Err(_) => last_error = Some("Mic unavailable".into()),
                         }
                     }
@@ -148,53 +345,189 @@ fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, whisper: Sender<V
                     MicGate::Denied => last_error = Some("Mic denied in Settings".into()),
                 }
                 if let Some(e) = &last_error {
-                    let _ = inbox.send(Input::StartFailed(e.clone()));
+                    let _ = inbox.send(tag(hold_id, Input::StartFailed(e.clone())));
                 }
             }
-            RecCmd::Stop => match session.take() {
-                Some(s) => match s.stop() {
-                    Ok(samples) => {
-                        let _ = whisper.send(samples);
-                    }
-                    Err(_) => {
-                        let _ = inbox.send(Input::Transcribed(Outcome::Failed(
-                            "Recording failed".into(),
-                        )));
-                    }
-                },
+            Some(RecCmd::Stop) => match hold.take() {
+                Some(h) => finish_hold(h, hold_id, &inbox, &jobs),
                 None => {
                     let msg = last_error.clone().unwrap_or_else(|| "No recording".into());
-                    let _ = inbox.send(Input::StartFailed(msg));
+                    let _ = inbox.send(tag(hold_id, Input::StartFailed(msg)));
                 }
             },
-            RecCmd::Discard => session = None,
+            Some(RecCmd::Discard) => {
+                hold = None;
+                with_jobs(&jobs, |q| q.clear());
+            }
         }
     }
 }
 
-fn whisper_thread(rx: Receiver<Vec<f32>>, inbox: Sender<Input>) {
+/// Loads the model on first use.
+fn ensure_model(model: &mut Option<LocalWhisper>) -> Result<&mut LocalWhisper, String> {
+    if model.is_none() {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = resolve_model_path(std::env::var("DEEPAI_MODEL_PATH").ok(), home, |p| {
+            p.is_file()
+        })
+        .ok_or_else(|| "Model missing".to_string())?;
+        let loaded = LocalWhisper::load(&path, crate::stt::local_whisper::default_threads())
+            .map_err(|_| "Model failed to load".to_string())?;
+        *model = Some(loaded);
+    }
+    model.as_mut().ok_or_else(|| "Model missing".to_string())
+}
+
+fn whisper_thread(jobs: SharedJobs, inbox: Sender<Input>) {
     let mut model: Option<LocalWhisper> = None;
-    for samples in rx {
-        let outcome = process_audio(&samples, |s| {
-            if model.is_none() {
-                let home = std::env::var_os("HOME").map(PathBuf::from);
-                let path = resolve_model_path(std::env::var("DEEPAI_MODEL_PATH").ok(), home, |p| {
-                    p.is_file()
-                })
-                .ok_or_else(|| "Model missing".to_string())?;
-                let loaded =
-                    LocalWhisper::load(&path, crate::stt::local_whisper::default_threads())
-                        .map_err(|_| "Model failed to load".to_string())?;
-                model = Some(loaded);
+    loop {
+        let (hold, job) = {
+            let (lock, cvar) = &*jobs;
+            let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
+            loop {
+                if let Some(job) = q.take_next() {
+                    break (q.hold(), job);
+                }
+                q = cvar.wait(q).unwrap_or_else(|e| e.into_inner());
             }
-            match model.as_mut() {
-                Some(m) => m
-                    .transcribe(s)
-                    .map_err(|_| "Transcription failed".to_string()),
-                None => Err("Model missing".to_string()),
+        };
+        let transcribe = |s: &[f32]| {
+            ensure_model(&mut model)?
+                .transcribe(s)
+                .map_err(|_| "Transcription failed".to_string())
+        };
+        let input = match job {
+            Job::Final { seq, samples, last } => {
+                let outcome = live::process_segment(&samples, transcribe);
+                if last {
+                    Some(Input::Transcribed(outcome))
+                } else {
+                    Some(Input::Segment { seq, outcome })
+                }
             }
-        });
-        let _ = inbox.send(Input::Transcribed(outcome));
+            Job::Partial { seq, samples } => match live::process_segment(&samples, transcribe) {
+                Outcome::Text(text) => Some(Input::Partial { seq, text }),
+                _ => None,
+            },
+        };
+        with_jobs(&jobs, |q| q.done());
+        if let Some(input) = input {
+            let _ = inbox.send(tag(hold, input));
+        }
+    }
+}
+
+/// Types one edit through `type_edit` and turns the result into the
+/// machine's input. No clipboard and no paste fallback: when typing fails,
+/// the rest of the edit is not inserted and a fixed status is shown.
+pub fn run_edit_with<G: TypingGuard>(
+    guard: &mut G,
+    backspaces: usize,
+    text: &str,
+    type_edit: impl FnOnce(&mut G, usize, &str) -> Result<EditOutcome, EditError>,
+) -> Input {
+    if backspaces == 0 && text.is_empty() {
+        return Input::Pasted(Ok(()));
+    }
+    match type_edit(guard, backspaces, text) {
+        Ok(EditOutcome::Done | EditOutcome::SkippedCorrection) => Input::Pasted(Ok(())),
+        Ok(EditOutcome::Stopped(reason)) => Input::Stopped(reason),
+        Err(e) => Input::Pasted(Err(paste_error_status(&e.error))),
+    }
+}
+
+/// Work for the typing thread, in order.
+enum EditCmd {
+    /// Hold `hold` started; `start` is the focus state at the key press.
+    Begin { hold: u64, start: Snapshot },
+    Edit {
+        hold: u64,
+        backspaces: usize,
+        text: String,
+    },
+}
+
+/// Focus guard plus Esc: once hold `hold` is cancelled, every check stops,
+/// so edits already queued or half typed send nothing more (no Backspace).
+struct HoldTypingGuard {
+    hold: u64,
+    cancelled: Arc<AtomicU64>,
+    focus: ProbeGuard<SystemProbe>,
+}
+
+impl TypingGuard for HoldTypingGuard {
+    fn check(&mut self) -> Gate {
+        if self.cancelled.load(Ordering::SeqCst) == self.hold {
+            return Gate::Stop(StopReason::Cancelled);
+        }
+        self.focus.check()
+    }
+}
+
+fn typing_thread(rx: Receiver<EditCmd>, inbox: Sender<Input>, cancelled: Arc<AtomicU64>) {
+    let mut guard: Option<(u64, HoldTypingGuard)> = None;
+    for cmd in rx {
+        match cmd {
+            EditCmd::Begin { hold, start } => {
+                let g = HoldTypingGuard {
+                    hold,
+                    cancelled: cancelled.clone(),
+                    focus: ProbeGuard::with_start(SystemProbe, start),
+                };
+                guard = Some((hold, g));
+            }
+            EditCmd::Edit {
+                hold,
+                backspaces,
+                text,
+            } => {
+                let input = match guard.as_mut() {
+                    Some((h, g)) if *h == hold => {
+                        run_edit_with(g, backspaces, &text, type_edit_checked)
+                    }
+                    // No start snapshot for this hold: we cannot confirm the
+                    // target, so type nothing.
+                    _ => Input::Stopped(StopReason::AppChanged),
+                };
+                let _ = inbox.send(tag(hold, input));
+            }
+        }
+    }
+}
+
+/// Keeps the global Esc shortcut registered exactly while the last value
+/// received is true. While registered, Esc is consumed by this app and does
+/// not reach the focused app; the rest of the time Esc works normally.
+/// If registering fails, Esc cancel is simply unavailable for that hold.
+fn escape_thread<R: Runtime>(app: AppHandle<R>, rx: Receiver<bool>, inbox: Sender<Input>) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let Ok(esc) = crate::hotkey::fallback::parse(ESCAPE_SHORTCUT) else {
+        tracing::warn!("Esc cancel unavailable: shortcut did not parse");
+        return;
+    };
+    let mut registered = false;
+    while let Ok(mut want) = rx.recv() {
+        // Only the newest wish matters.
+        while let Ok(w) = rx.try_recv() {
+            want = w;
+        }
+        if want && !registered {
+            let inbox = inbox.clone();
+            let result = app.global_shortcut().on_shortcut(esc, move |_, _, event| {
+                if event.state() == ShortcutState::Pressed {
+                    let _ = inbox.send(Input::Cancel);
+                }
+            });
+            match result {
+                Ok(()) => registered = true,
+                Err(_) => tracing::warn!("Esc cancel unavailable: shortcut not registered"),
+            }
+        } else if !want && registered {
+            if app.global_shortcut().unregister(esc).is_err() {
+                tracing::warn!("Esc shortcut could not be released");
+            }
+            registered = false;
+        }
     }
 }
 
@@ -218,27 +551,58 @@ fn show_status<R: Runtime>(app: &AppHandle<R>, text: &str) {
 pub fn spawn<R: Runtime>(app: AppHandle<R>) -> impl Fn(HotkeyAction) + Send + 'static {
     let (inbox_tx, inbox_rx) = channel::<Input>();
     let (rec_tx, rec_rx) = channel::<RecCmd>();
-    let (whisper_tx, whisper_rx) = channel::<Vec<f32>>();
+    let (edit_tx, edit_rx) = channel::<EditCmd>();
+    let jobs: SharedJobs = Arc::new((Mutex::new(JobQueue::default()), Condvar::new()));
 
+    let (inbox, q) = (inbox_tx.clone(), jobs.clone());
+    std::thread::spawn(move || recorder_thread(rec_rx, inbox, q));
     let inbox = inbox_tx.clone();
-    std::thread::spawn(move || recorder_thread(rec_rx, inbox, whisper_tx));
-    let inbox = inbox_tx.clone();
-    std::thread::spawn(move || whisper_thread(whisper_rx, inbox));
+    std::thread::spawn(move || whisper_thread(jobs, inbox));
+    // Id of the last hold cancelled with Esc (0: none).
+    let cancelled = Arc::new(AtomicU64::new(0));
+    // One typing thread, so edits land in order.
+    let (inbox, c) = (inbox_tx.clone(), cancelled.clone());
+    std::thread::spawn(move || typing_thread(edit_rx, inbox, c));
+    // Registers Esc while a hold is active; the plugin call blocks on the
+    // main thread, so it runs here instead of on the orchestrator.
+    let (esc_tx, esc_rx) = channel::<bool>();
+    let (inbox, esc_app) = (inbox_tx.clone(), app.clone());
+    std::thread::spawn(move || escape_thread(esc_app, esc_rx, inbox));
 
     let inbox = inbox_tx.clone();
     std::thread::spawn(move || {
-        drive(
+        // Mirrors Machine::hold_id: the machine starts a new hold exactly
+        // when it emits StartCapture, and both count from 0.
+        let mut hold: u64 = 0;
+        drive_live_with(
             inbox_rx,
             |text| show_status(&app, text),
+            |text| {
+                let _ = tauri::Emitter::emit(&app, PARTIAL_EVENT, text);
+            },
             |effect| match effect {
                 Effect::StartCapture => {
-                    let _ = rec_tx.send(RecCmd::Start);
+                    hold += 1;
+                    // Focus state at the key press, before any audio or typing.
+                    let start = SystemProbe.snapshot();
+                    let _ = edit_tx.send(EditCmd::Begin { hold, start });
+                    let _ = rec_tx.send(RecCmd::Start(hold));
                 }
                 Effect::StopAndTranscribe => {
                     let _ = rec_tx.send(RecCmd::Stop);
                 }
                 Effect::DiscardCapture => {
                     let _ = rec_tx.send(RecCmd::Discard);
+                }
+                Effect::CancelHold => {
+                    // Typing stops first, then audio and queued jobs go.
+                    cancelled.store(hold, Ordering::SeqCst);
+                    let _ = rec_tx.send(RecCmd::Discard);
+                    let inbox = inbox.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(CANCEL_VISIBLE);
+                        let _ = inbox.send(Input::ClearError);
+                    });
                 }
                 Effect::ScheduleClearError => {
                     let inbox = inbox.clone();
@@ -248,23 +612,22 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>) -> impl Fn(HotkeyAction) + Send + 's
                     });
                 }
                 Effect::Paste(text) => {
-                    let inbox = inbox.clone();
-                    std::thread::spawn(move || {
-                        let result = paste_text_with_delay(&text, PASTE_SETTLE_MS).map_err(|e| {
-                            // The status says "Copied", so make it true: leave the
-                            // text on the clipboard for a manual Cmd+V.
-                            let copied = arboard::Clipboard::new()
-                                .and_then(|mut c| c.set_text(text.clone()))
-                                .is_ok();
-                            if copied {
-                                paste_error_status(&e)
-                            } else {
-                                "Paste failed".to_string()
-                            }
-                        });
-                        let _ = inbox.send(Input::Pasted(result));
+                    let _ = edit_tx.send(EditCmd::Edit {
+                        hold,
+                        backspaces: 0,
+                        text,
                     });
                 }
+                Effect::Correct { backspaces, text } => {
+                    let _ = edit_tx.send(EditCmd::Edit {
+                        hold,
+                        backspaces,
+                        text,
+                    });
+                }
+            },
+            |state| {
+                let _ = esc_tx.send(escape_wanted(state));
             },
         );
     });

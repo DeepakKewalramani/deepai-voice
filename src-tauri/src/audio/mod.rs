@@ -6,9 +6,9 @@ pub mod resample;
 pub use capture::AvFoundationProvider;
 pub use capture::{
     AudioCaptureConfig, AudioCaptureSession, CpalDeviceProbe, InMemoryAudioBuffer, LevelCallback,
-    LevelMeterEvent, MicPermissionProvider, MicPermissionStatus, RawChunkSink,
+    LevelMeterEvent, LiveDrain, MicPermissionProvider, MicPermissionStatus, RawChunkSink,
     check_microphone_permission, check_microphone_permission_with, map_av_authorization_status,
     request_microphone_permission, request_microphone_permission_with,
 };
 pub use meter::{calculate_peak_db, calculate_rms, calculate_rms_db};
-pub use resample::{downmix_to_mono, resample_to_16k};
+pub use resample::{StreamResampler16k, downmix_to_mono, resample_to_16k};

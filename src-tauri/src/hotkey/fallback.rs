@@ -22,10 +22,21 @@ pub fn parse(shortcut: &str) -> Result<Shortcut, String> {
     shortcut.parse::<Shortcut>().map_err(|e| e.to_string())
 }
 
+/// True for the plain Escape shortcut used to cancel a dictation.
+pub fn is_escape(shortcut: &Shortcut) -> bool {
+    parse(crate::dictation::ESCAPE_SHORTCUT).is_ok_and(|esc| esc.id() == shortcut.id())
+}
+
 /// Builds the plugin; events go to `tx`.
 pub fn plugin<R: Runtime>(tx: Sender<HotkeyEvent>) -> tauri::plugin::TauriPlugin<R> {
     tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(move |_app, _shortcut, event| {
+        .with_handler(move |_app, shortcut, event| {
+            // Esc (dictation cancel) has its own handler; the plugin calls
+            // this global handler for it too, so it must not act as the
+            // hold-to-talk key.
+            if is_escape(shortcut) {
+                return;
+            }
             let _ = tx.send(map_state(event.state()));
         })
         .build()

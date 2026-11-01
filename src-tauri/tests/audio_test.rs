@@ -264,3 +264,78 @@ fn test_permission_request_through_seam() {
     );
     assert_eq!(*got.lock().unwrap(), Some(true));
 }
+
+// Live (streaming) drain: the same audio as `stop()`, delivered in pieces.
+
+fn sine(rate: u32, secs: f32, freq: f32, channels: u16) -> Vec<f32> {
+    let n = (rate as f32 * secs) as usize;
+    let mut out = Vec::with_capacity(n * channels as usize);
+    for i in 0..n {
+        let s = (2.0 * PI * freq * i as f32 / rate as f32).sin() * 0.5;
+        for _ in 0..channels {
+            out.push(s);
+        }
+    }
+    out
+}
+
+#[test]
+fn test_stream_resampler_keeps_length_and_tone_in_any_chunking() {
+    use deepai_voice_lib::audio::resample::StreamResampler16k;
+    let input = sine(48000, 1.0, 440.0, 1);
+    for chunk in [333usize, 1024, 4800, 48000] {
+        let mut r = StreamResampler16k::new(48000).unwrap();
+        let mut out = Vec::new();
+        for c in input.chunks(chunk) {
+            out.extend(r.push(c).unwrap());
+        }
+        out.extend(r.finish().unwrap());
+        assert!(
+            (out.len() as isize - 16000).abs() <= 2,
+            "chunk {chunk}: {} samples",
+            out.len()
+        );
+        let body = &out[200..out.len() - 200];
+        assert!((calculate_rms(body) - 0.5 / 2f32.sqrt()).abs() < 0.02);
+        // Same audio as the whole-buffer path.
+        let whole = resample_to_16k(&input, 48000).unwrap();
+        let worst = body
+            .iter()
+            .zip(&whole[200..])
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst < 0.01, "chunk {chunk}: differs by {worst}");
+    }
+}
+
+#[test]
+fn test_stream_resampler_returns_audio_before_finish() {
+    use deepai_voice_lib::audio::resample::StreamResampler16k;
+    let mut r = StreamResampler16k::new(44100).unwrap();
+    let got = r.push(&sine(44100, 0.5, 300.0, 1)).unwrap();
+    assert!(got.len() > 6000, "only {} samples after 0.5 s", got.len());
+    let mut r = StreamResampler16k::new(16000).unwrap();
+    assert_eq!(r.push(&[0.1, 0.2]).unwrap(), vec![0.1, 0.2]);
+    assert!(r.finish().unwrap().is_empty());
+}
+
+#[test]
+fn test_live_drain_matches_stop_path_rules() {
+    use deepai_voice_lib::audio::LiveDrain;
+    let config = AudioCaptureConfig {
+        discard_transient_ms: 50,
+        max_record_seconds: 1,
+    };
+    // 16 kHz stereo, 2 s: downmixed, first 50 ms dropped, capped at 1 s.
+    let raw = sine(16000, 2.0, 200.0, 2);
+    let mut live = LiveDrain::new(16000, 2, config.clone()).unwrap();
+    let mut out = Vec::new();
+    for c in raw.chunks(998) {
+        out.extend(live.push(c).unwrap());
+    }
+    out.extend(live.finish().unwrap());
+
+    let mono = downmix_to_mono(&raw, 2).unwrap();
+    let mut expected = InMemoryAudioBuffer::new(16000, config);
+    expected.push_samples(&mono);
+    assert_eq!(out, expected.into_samples());
+}
