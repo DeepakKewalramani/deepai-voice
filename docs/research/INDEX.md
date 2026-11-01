@@ -16,6 +16,7 @@ Labels: FACT (seen on an official page, paper, command output or in our repo, wi
 | R.7 | sherpa-onnx trial on this Intel Mac (throwaway project outside the repo, approved crate and model) | 2026-11-01 | claude main + subagent | DONE | Summary below. Scratch files in `~/.cache/deepai-spike/` on the machine that ran it, not in the repo. | Viable but weak: see numbers below. Not built into the app. |
 | R.8 | Apple on-device speech: which locales run on device on this Mac | 2026-11-01 | claude main | DONE | `docs/specs/language-independent-speech.md` section 2 | en-US and en-IN run on device. en-GB and hi-IN need a server, so they are not usable offline. |
 | R.9 | Language-independent speech engine: what is needed, how, and the own-model path | 2026-11-01 | claude main + research subagent | DONE | `docs/specs/language-independent-speech.md` | Do not train first. Multilingual Whisper, then an Indian-language engine, then Hinglish fine-tuning, own model only if measurements show a gap. |
+| R.10 | Providers for India: Gnani, Reverie, Bhashini, Smallest, Soniox, Speechmatics and others for Hindi and Hinglish | 2026-11-01 | research subagent | DONE | `docs/research/providers-india-findings.md` | List Sarvam, Soniox, Smallest, Deepgram, ElevenLabs, Groq as verified; Reverie and Gnani as candidates (price or access unknown). |
 
 ## Numbers kept from R.7 (FACT, measured on 1 Nov 2026, Intel i9, CPU only)
 
