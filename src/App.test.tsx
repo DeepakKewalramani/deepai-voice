@@ -10,7 +10,13 @@ describe("App", () => {
   it("has a labelled main navigation with the current view marked", () => {
     const m = renderToStaticMarkup(<App />);
     expect(m).toContain('<nav class="nav" aria-label="Main">');
-    for (const label of ["Home", "Dictionary", "Styles", "Settings"])
+    for (const label of [
+      "Home",
+      "Dictionary",
+      "Providers",
+      "Styles",
+      "Settings",
+    ])
       expect(m).toContain(`<span class="nav-label">${label}</span>`);
     expect(m.match(/aria-current="page"/g)).toHaveLength(1);
     expect(m).toMatch(/aria-current="page"[^>]*title="Home"/);
@@ -39,8 +45,19 @@ describe("App", () => {
 
     const settings = renderToStaticMarkup(<App initialView="settings" />);
     expect(settings).toContain('role="tablist"');
-    for (const id of ["general", "providers", "shortcuts", "privacy", "about"])
+    for (const id of ["general", "shortcuts", "privacy", "about"])
       expect(settings).toContain(`id="tab-${id}"`);
     expect(settings).not.toContain('id="tab-styles"');
+    // Providers moved out of Settings into its own section.
+    expect(settings).not.toContain('id="tab-providers"');
+  });
+
+  it("shows Providers as a main section without a tab bar or Save bar", () => {
+    const m = renderToStaticMarkup(<App initialView="providers" />);
+    expect(m).toMatch(/aria-current="page"[^>]*title="Providers"/);
+    expect(m).toContain("Connect speech, language and voice providers");
+    expect(m).not.toContain('role="tablist"');
+    expect(m).not.toContain("settings-footer");
+    expect(m).toContain("Connected providers are saved on this Mac");
   });
 });

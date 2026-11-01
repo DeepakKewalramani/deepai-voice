@@ -25,6 +25,8 @@ export interface SettingsShellProps {
     apiKeys: Record<string, string>,
   ) => void | Promise<void>;
   onReset?: () => void;
+  /** Show the Save and Reset bar. Default true. Off for sections that save on their own (Providers). */
+  showFooter?: boolean;
   /** Tabs to show, in order. Defaults to all. One tab renders without a tab bar. */
   tabs?: SettingsTab[];
 }
@@ -46,6 +48,7 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
   onSave,
   onReset,
   tabs: tabIds,
+  showFooter = true,
 }) => {
   const tabs = tabIds ? allTabs.filter((t) => tabIds.includes(t.id)) : allTabs;
   const single = tabs.length === 1;
@@ -197,34 +200,36 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
       )}
       <div className="settings-main">
         {body}
-        <footer className="settings-footer">
-          <span
-            className="settings-status"
-            role="status"
-            data-kind={state.status?.kind}
-          >
-            {state.status?.text ?? (dirty ? "Unsaved changes" : "")}
-          </span>
-          <button
-            type="button"
-            className="settings-btn"
-            disabled={!dirty}
-            onClick={() => {
-              dispatch({ type: "reset" });
-              onReset?.();
-            }}
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            className="settings-btn settings-btn-primary"
-            disabled={!dirty || saving}
-            onClick={handleSave}
-          >
-            Save
-          </button>
-        </footer>
+        {showFooter && (
+          <footer className="settings-footer">
+            <span
+              className="settings-status"
+              role="status"
+              data-kind={state.status?.kind}
+            >
+              {state.status?.text ?? (dirty ? "Unsaved changes" : "")}
+            </span>
+            <button
+              type="button"
+              className="settings-btn"
+              disabled={!dirty}
+              onClick={() => {
+                dispatch({ type: "reset" });
+                onReset?.();
+              }}
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              className="settings-btn settings-btn-primary"
+              disabled={!dirty || saving}
+              onClick={handleSave}
+            >
+              Save
+            </button>
+          </footer>
+        )}
       </div>
     </div>
   );

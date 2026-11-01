@@ -177,7 +177,7 @@ describe("Home permissions hint", () => {
       m.indexOf('id="tab-permissions"'),
     );
     expect(m.indexOf('id="tab-permissions"')).toBeLessThan(
-      m.indexOf('id="tab-providers"'),
+      m.indexOf('id="tab-shortcuts"'),
     );
     // Outside Tauri the status is unknown, so Home shows no hint.
     expect(renderToStaticMarkup(<App />)).not.toContain("Permissions needed");

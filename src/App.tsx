@@ -7,13 +7,21 @@ import { usePermissions } from "./settings/usePermissions";
 import { useDictationPartial } from "./ui/useDictationPartial";
 import { useDictationStatus } from "./ui/useDictationStatus";
 import { DictionaryView, HomeView, ViewHeader } from "./ui/views";
-import { BookIcon, GearIcon, HomeIcon, LogoMark, StylesIcon } from "./ui/icons";
+import {
+  BookIcon,
+  GearIcon,
+  HomeIcon,
+  LogoMark,
+  PlugIcon,
+  StylesIcon,
+} from "./ui/icons";
 
-type View = "home" | "dictionary" | "styles" | "settings";
+type View = "home" | "dictionary" | "providers" | "styles" | "settings";
 
 const nav: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: "home", label: "Home", icon: <HomeIcon /> },
   { id: "dictionary", label: "Dictionary", icon: <BookIcon /> },
+  { id: "providers", label: "Providers", icon: <PlugIcon /> },
   { id: "styles", label: "Styles", icon: <StylesIcon /> },
   { id: "settings", label: "Settings", icon: <GearIcon /> },
 ];
@@ -70,6 +78,19 @@ function App({ initialView = "home" }: { initialView?: View }) {
           />
         )}
         {view === "dictionary" && <DictionaryView />}
+        {view === "providers" && (
+          <div className="view view-fill">
+            <ViewHeader
+              title="Providers"
+              subtitle="Connect speech, language and voice providers, or add your own."
+            />
+            <SettingsShell
+              activeTab="providers"
+              tabs={["providers"]}
+              showFooter={false}
+            />
+          </div>
+        )}
         {view === "styles" && (
           <div className="view view-fill">
             <ViewHeader
@@ -83,18 +104,11 @@ function App({ initialView = "home" }: { initialView?: View }) {
           <div className="view view-fill">
             <ViewHeader
               title="Settings"
-              subtitle="Recording, permissions, providers, shortcuts and privacy."
+              subtitle="Recording, permissions, shortcuts and privacy."
             />
             <SettingsShell
               activeTab={settingsTab}
-              tabs={[
-                "general",
-                "permissions",
-                "providers",
-                "shortcuts",
-                "privacy",
-                "about",
-              ]}
+              tabs={["general", "permissions", "shortcuts", "privacy", "about"]}
             />
           </div>
         )}

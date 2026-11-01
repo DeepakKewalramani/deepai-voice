@@ -44,6 +44,14 @@ export const GearIcon = () => (
   </Svg>
 );
 
+export const PlugIcon = () => (
+  <Svg>
+    <path d="M6.5 2.5v3M11.5 2.5v3" />
+    <path d="M4.5 5.5h9v2.5a4.5 4.5 0 0 1-9 0z" />
+    <path d="M9 12.5v3" />
+  </Svg>
+);
+
 export const LockIcon = () => (
   <Svg>
     <rect x="3.5" y="8" width="11" height="7.5" rx="2" />
