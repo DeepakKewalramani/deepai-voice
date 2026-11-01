@@ -1,41 +1,82 @@
-import { useEffect, useState } from "react";
+import { CSSProperties, useEffect, useRef, useState } from "react";
 import "./overlay.css";
 import {
   ERROR_HOLD_MS,
+  ERROR_LINE_W,
   IDLE,
+  OverlayMode,
   OverlayPosition,
   OverlayState,
+  WAVE_H,
+  WAVE_W,
+  capsuleSize,
+  draggingFromPayload,
+  levelFromPayload,
   overlayStateFromText,
   positionFromText,
+  sinePath,
+  waveAmplitude,
 } from "./state";
 
 /** Event the Rust dictation orchestrator emits with the status text. */
 export const DICTATION_STATUS_EVENT = "dictation-status";
+/** Optional mic level event (a number 0..1). Without it the wave loops. */
+export const DICTATION_LEVEL_EVENT = "dictation-level";
 /** Event Rust sends when the pill is moved (payload "top" etc). */
 export const OVERLAY_POSITION_EVENT = "overlay-position";
-/** Dev-only window event: `{ status?: string, position?: string }`. */
+/** Event Rust sends while the pill is dragged: `{ dragging: bool }`. */
+export const OVERLAY_DRAG_EVENT = "overlay-drag";
+/** Event the pill sends with its capsule size, for the drag hit test. */
+export const OVERLAY_CAPSULE_EVENT = "overlay-capsule";
+/** Dev-only window event: `{ status?, position? }`. */
 export const OVERLAY_PREVIEW_EVENT = "overlay-preview";
 
-const WAVE_BARS = 7;
+/** Static gentle wave for reduced motion and the first paint. */
+const STILL_AMPLITUDE = 4.5;
+/** Thinking travels slower than listening. */
+const THINKING_SPEED = 0.35;
 
 export function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/** The first, static path for a mode (also the reduced motion drawing). */
+function stillPath(mode: OverlayMode): string {
+  if (mode === "error") return sinePath(0, 0, ERROR_LINE_W);
+  if (mode === "thinking") return sinePath(0, waveAmplitude("thinking", 0));
+  return sinePath(0, STILL_AMPLITUDE);
+}
+
 interface Props {
   initialState?: OverlayState;
   initialPosition?: OverlayPosition;
+  /** Ignored: the capsule shows no text. Kept for src/main.tsx. */
+  initialPartial?: string;
+  initialDragging?: boolean;
 }
 
-/** Notch-style status pill rendered in the transparent `overlay` window. */
+/** DeepAI sine capsule: a plain graphite capsule that shows one moving
+ * sine line while listening, shown in the transparent `overlay` window. */
 export default function Overlay({
   initialState = IDLE,
   initialPosition = "top",
+  initialDragging = false,
 }: Props) {
   const [state, setState] = useState<OverlayState>(initialState);
   const [position, setPosition] = useState<OverlayPosition>(initialPosition);
+  const [dragging, setDragging] = useState<boolean>(initialDragging);
+  const pathRef = useRef<SVGPathElement>(null);
+  const levelRef = useRef<number | null>(null);
 
-  // Live status and position from the backend.
+  // Live status, position, drag and mic level from the backend.
   useEffect(() => {
     if (!inTauri()) return;
     let active = true;
@@ -53,13 +94,19 @@ export default function Overlay({
           listen<string>(OVERLAY_POSITION_EVENT, (e) =>
             setPosition(positionFromText(e.payload)),
           ),
+          listen<unknown>(OVERLAY_DRAG_EVENT, (e) =>
+            setDragging(draggingFromPayload(e.payload)),
+          ),
+          listen<unknown>(DICTATION_LEVEL_EVENT, (e) => {
+            levelRef.current = levelFromPayload(e.payload);
+          }),
         ]);
         if (active) unlisteners.push(...subs);
         else subs.forEach((fn) => fn());
         const pos = await invoke<string>("get_overlay_position");
         if (active) setPosition(positionFromText(pos));
       } catch {
-        // No backend: stay idle at the notch.
+        // No backend: stay idle at the top.
       }
     })();
     return () => {
@@ -89,52 +136,92 @@ export default function Overlay({
   }, [state]);
 
   const { mode, label } = state;
+  const size = capsuleSize(mode);
+
+  // Tell Rust the capsule size so a press is only grabbed on the capsule.
+  useEffect(() => {
+    if (!inTauri()) return;
+    void import("@tauri-apps/api/event")
+      .then(({ emit }) => emit(OVERLAY_CAPSULE_EVENT, size))
+      .catch(() => {});
+  }, [size]);
+
+  // Animate the wave only while listening or thinking, only while the page
+  // is visible, and never with reduced motion (the still path stays).
+  useEffect(() => {
+    if (mode !== "listening" && mode !== "thinking") return;
+    if (prefersReducedMotion()) return;
+    const speed = mode === "thinking" ? THINKING_SPEED : 1;
+    let raf = 0;
+    const tick = (t: number) => {
+      raf = 0;
+      if (document.hidden) return;
+      pathRef.current?.setAttribute(
+        "d",
+        sinePath(
+          t,
+          waveAmplitude(mode, t, levelRef.current),
+          WAVE_W,
+          WAVE_H,
+          speed,
+        ),
+      );
+      raf = requestAnimationFrame(tick);
+    };
+    const start = () => {
+      if (raf === 0 && !document.hidden) raf = requestAnimationFrame(tick);
+    };
+    document.addEventListener("visibilitychange", start);
+    start();
+    return () => {
+      document.removeEventListener("visibilitychange", start);
+      if (raf !== 0) cancelAnimationFrame(raf);
+    };
+  }, [mode]);
+
+  const style = {
+    "--w": `${size.width}px`,
+    "--h": `${size.height}px`,
+  } as CSSProperties;
+  const lineW = mode === "error" ? ERROR_LINE_W : WAVE_W;
   return (
-    <div className="ov" data-pos={position} data-mode={mode}>
+    <div
+      className="ov"
+      data-pos={position}
+      data-mode={mode}
+      data-dragging={dragging ? "true" : undefined}
+    >
       <div
         className="ov-pill"
+        style={style}
         role="status"
         aria-live="polite"
         aria-label={mode === "idle" ? "DeepAI Voice ready" : label}
       >
-        <div className="ov-bg" aria-hidden="true" />
-        <div className="ov-content" key={mode}>
-          {mode === "idle" && (
-            <span className="ov-idle-dot" aria-hidden="true" />
-          )}
-          {mode === "listening" && (
-            <>
-              <span className="ov-rec" aria-hidden="true" />
-              <span className="ov-label">{label}</span>
-              <span className="ov-wave" aria-hidden="true">
-                {Array.from({ length: WAVE_BARS }, (_, i) => (
-                  <i
-                    key={i}
-                    style={{ animationDelay: `${(i * 137) % 600}ms` }}
-                  />
-                ))}
-              </span>
-            </>
-          )}
-          {mode === "thinking" && (
-            <>
-              <span className="ov-dots" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
-              <span className="ov-label ov-label-soft">{label}</span>
-            </>
-          )}
-          {mode === "error" && (
-            <>
-              <span className="ov-err-dot" aria-hidden="true" />
-              <span className="ov-label ov-label-err" title={label}>
-                {label}
-              </span>
-            </>
-          )}
-        </div>
+        {mode !== "idle" && (
+          <svg
+            className="ov-wave"
+            width={lineW}
+            height={WAVE_H}
+            viewBox={`0 0 ${lineW} ${WAVE_H}`}
+            aria-hidden="true"
+          >
+            <defs>
+              <linearGradient
+                id="ov-sine-grad"
+                gradientUnits="userSpaceOnUse"
+                x1="0"
+                y1="0"
+                x2={WAVE_W}
+                y2="0"
+              >
+                <stop offset="0" stopColor="#ff8a4c" />
+                <stop offset="1" stopColor="#b86bff" />
+              </linearGradient>
+            </defs>
+            <path ref={pathRef} className="ov-line" d={stillPath(mode)} />
+          </svg>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,10 @@
 import React, { useState } from "react";
 import "./ui/theme.css";
 import "./ui/shell.css";
-import { SettingsShell } from "./settings";
+import { SettingsShell, SettingsTab } from "./settings";
+import { missingRequired } from "./settings/permissions";
+import { usePermissions } from "./settings/usePermissions";
+import { useDictationPartial } from "./ui/useDictationPartial";
 import { useDictationStatus } from "./ui/useDictationStatus";
 import { DictionaryView, HomeView, ViewHeader } from "./ui/views";
 import { BookIcon, GearIcon, HomeIcon, LogoMark, StylesIcon } from "./ui/icons";
@@ -17,7 +20,16 @@ const nav: { id: View; label: string; icon: React.ReactNode }[] = [
 
 function App({ initialView = "home" }: { initialView?: View }) {
   const status = useDictationStatus();
+  const partial = useDictationPartial();
   const [view, setView] = useState<View>(initialView);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | undefined>();
+  const permissions = usePermissions({ poll: false });
+  const fixPermissions = missingRequired(permissions.status)
+    ? () => {
+        setSettingsTab("permissions");
+        setView("settings");
+      }
+    : undefined;
 
   return (
     <div className="shell">
@@ -34,7 +46,10 @@ function App({ initialView = "home" }: { initialView?: View }) {
                   type="button"
                   className="nav-item"
                   aria-current={view === item.id ? "page" : undefined}
-                  onClick={() => setView(item.id)}
+                  onClick={() => {
+                    setSettingsTab(undefined);
+                    setView(item.id);
+                  }}
                   title={item.label}
                 >
                   {item.icon}
@@ -47,7 +62,13 @@ function App({ initialView = "home" }: { initialView?: View }) {
         <p className="sidebar-footer">Version 0.1.0</p>
       </aside>
       <main className="content">
-        {view === "home" && <HomeView status={status} />}
+        {view === "home" && (
+          <HomeView
+            status={status}
+            partial={partial}
+            onFixPermissions={fixPermissions}
+          />
+        )}
         {view === "dictionary" && <DictionaryView />}
         {view === "styles" && (
           <div className="view view-fill">
@@ -62,10 +83,18 @@ function App({ initialView = "home" }: { initialView?: View }) {
           <div className="view view-fill">
             <ViewHeader
               title="Settings"
-              subtitle="Recording, providers, shortcuts and privacy."
+              subtitle="Recording, permissions, providers, shortcuts and privacy."
             />
             <SettingsShell
-              tabs={["general", "providers", "shortcuts", "privacy", "about"]}
+              activeTab={settingsTab}
+              tabs={[
+                "general",
+                "permissions",
+                "providers",
+                "shortcuts",
+                "privacy",
+                "about",
+              ]}
             />
           </div>
         )}

@@ -22,10 +22,18 @@ const steps: { title: string; body: React.ReactNode }[] = [
   { title: "Release", body: "Your words are pasted where your cursor is." },
 ];
 
-export const HomeView: React.FC<{ status: DictationStatus }> = ({ status }) => (
+export const HomeView: React.FC<{
+  status: DictationStatus;
+  partial?: string;
+  onFixPermissions?: () => void;
+}> = ({ status, partial = "", onFixPermissions }) => (
   <div className="view">
     <ViewHeader title="Home" subtitle="Dictate into any app on your Mac." />
-    <StatusCard status={status} />
+    <StatusCard
+      status={status}
+      partial={partial}
+      onFixPermissions={onFixPermissions}
+    />
     <section className="how" aria-labelledby="how-title">
       <h3 id="how-title" className="section-title">
         How it works

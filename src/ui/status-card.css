@@ -188,3 +188,54 @@
     font-size: 21px;
   }
 }
+
+/* Live line: the words not typed yet, quiet and on one line. */
+.status-live {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--c-text-muted);
+}
+.status-live-label {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tone);
+}
+.status-live-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+/* Missing permission hint: one quiet line with a link to Settings. */
+.status-perm {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+}
+.status-perm-link {
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--c-accent);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.status-perm-link:hover {
+  text-decoration: underline;
+}
+.status-perm-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--c-ring);
+}

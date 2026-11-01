@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StatusCard } from "../StatusCard";
-import { DictationStatus, READY, statusFromText } from "../status";
+import {
+  DictationStatus,
+  LIVE_LINE_MAX,
+  READY,
+  liveLine,
+  statusFromText,
+} from "../status";
 
 const render = (status: DictationStatus) =>
   renderToStaticMarkup(<StatusCard status={status} />);
@@ -57,5 +63,35 @@ describe("StatusCard", () => {
     const m = render(READY);
     expect(m).toContain('aria-label="Dictation status"');
     expect(m).toContain('role="status" aria-live="polite"');
+  });
+
+  it("shows a quiet Live line only while recording", () => {
+    const rec = { kind: "recording", message: "" } as const;
+    const m = renderToStaticMarkup(
+      <StatusCard status={rec} partial="hello there" />,
+    );
+    expect(m).toContain('class="status-live"');
+    expect(m).toContain(">hello there<");
+    expect(render(rec)).not.toContain("status-live");
+    expect(
+      renderToStaticMarkup(<StatusCard status={READY} partial="hello" />),
+    ).not.toContain("status-live");
+  });
+});
+
+describe("liveLine", () => {
+  const rec = { kind: "recording", message: "" } as const;
+  it("is empty outside recording or without text", () => {
+    expect(liveLine(READY, "hi")).toBe("");
+    expect(liveLine({ kind: "transcribing", message: "" }, "hi")).toBe("");
+    expect(liveLine(rec, "")).toBe("");
+    expect(liveLine(rec, undefined)).toBe("");
+  });
+  it("cleans whitespace and ellipsizes long text at the start", () => {
+    expect(liveLine(rec, "  hello \n there ")).toBe("hello there");
+    const t = liveLine(rec, "word ".repeat(60) + "last");
+    expect(Array.from(t).length).toBeLessThanOrEqual(LIVE_LINE_MAX);
+    expect(t.startsWith("\u2026")).toBe(true);
+    expect(t.endsWith("word last")).toBe(true);
   });
 });

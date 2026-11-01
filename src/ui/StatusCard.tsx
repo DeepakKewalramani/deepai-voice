@@ -1,6 +1,6 @@
 import React from "react";
 import "./status-card.css";
-import { DictationKind, DictationStatus } from "./status";
+import { DictationKind, DictationStatus, liveLine } from "./status";
 
 const copy: Record<
   DictationKind,
@@ -65,10 +65,19 @@ const Mark: React.FC<{ kind: DictationKind }> = ({ kind }) => (
 
 export interface StatusCardProps {
   status: DictationStatus;
+  /** Live, not yet typed text while recording. */
+  partial?: string;
+  /** Set when a required macOS permission is missing; opens Settings > Permissions. */
+  onFixPermissions?: () => void;
 }
 
-export const StatusCard: React.FC<StatusCardProps> = ({ status }) => {
+export const StatusCard: React.FC<StatusCardProps> = ({
+  status,
+  partial = "",
+  onFixPermissions,
+}) => {
   const c = copy[status.kind];
+  const live = liveLine(status, partial);
   const detail =
     status.kind === "error" && status.message ? status.message : c.detail;
   return (
@@ -84,10 +93,28 @@ export const StatusCard: React.FC<StatusCardProps> = ({ status }) => {
         </span>
         <h3 className="status-title">{c.title}</h3>
         <p className="status-detail">{detail}</p>
+        {live !== "" && (
+          <p className="status-live">
+            <span className="status-live-label">Live</span>
+            <span className="status-live-text">{live}</span>
+          </p>
+        )}
         <p className="status-hint">
           <span className="status-hint-label">Shortcut</span>
           <Keys keys={["Fn"]} />
         </p>
+        {onFixPermissions && (
+          <p className="status-perm">
+            Permissions needed.{" "}
+            <button
+              type="button"
+              className="status-perm-link"
+              onClick={onFixPermissions}
+            >
+              Open Settings
+            </button>
+          </p>
+        )}
       </div>
       <Mark kind={status.kind} />
     </section>

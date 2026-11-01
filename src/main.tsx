@@ -8,7 +8,8 @@ async function rootElement(): Promise<React.ReactElement> {
     // The notch pill window: no App code or app CSS, transparent page.
     document.documentElement.classList.add("overlay-view");
     const { default: Overlay } = await import("./overlay/Overlay");
-    // Dev preview only: ?state=listening&pos=left forces a look in a browser.
+    // Dev preview only: ?state=listening&pos=left&partial=some%20words forces
+    // a look in a browser.
     const preview = import.meta.env.DEV
       ? previewFromSearch(window.location.search)
       : null;
@@ -16,6 +17,7 @@ async function rootElement(): Promise<React.ReactElement> {
       <Overlay
         initialState={preview?.state ?? undefined}
         initialPosition={preview?.position ?? undefined}
+        initialPartial={preview?.partial ?? undefined}
       />
     );
   }

@@ -22,3 +22,23 @@ export function statusFromText(text: string): DictationStatus {
   if (t === "...") return { kind: "transcribing", message: "" };
   return { kind: "error", message: t };
 }
+
+/** Most characters of live text the status card shows. */
+export const LIVE_LINE_MAX = 120;
+
+/**
+ * The quiet "Live" line for the status card: the not yet typed words while
+ * recording, as one line ellipsized at the start. Empty in any other state.
+ */
+export function liveLine(status: DictationStatus, partial: unknown): string {
+  if (status.kind !== "recording" || typeof partial !== "string") return "";
+  const chars = Array.from(partial.replace(/\s+/g, " ").trim());
+  if (chars.length <= LIVE_LINE_MAX) return chars.join("");
+  return (
+    "…" +
+    chars
+      .slice(chars.length - (LIVE_LINE_MAX - 1))
+      .join("")
+      .trimStart()
+  );
+}

@@ -14,30 +14,65 @@ const render = (
     />,
   );
 
+/** Text between tags, so no state shows words inside the capsule. */
+const visibleText = (m: string) => m.replace(/<[^>]*>/g, "").trim();
+
 describe("Overlay", () => {
-  it("starts idle at the notch with no text", () => {
+  it("is a plain empty capsule when idle", () => {
     const m = renderToStaticMarkup(<Overlay />);
     expect(m).toContain('data-mode="idle"');
     expect(m).toContain('data-pos="top"');
     expect(m).toContain('aria-label="DeepAI Voice ready"');
-    expect(m).not.toContain("ov-label");
+    expect(m).toContain("--w:60px");
+    expect(m).toContain("--h:30px");
+    // Nothing inside: no wave, no orb, no dots.
+    expect(m).not.toContain("<svg");
+    expect(m).not.toContain("ov-orb");
+    expect(m).not.toContain("ov-eq");
+    expect(visibleText(m)).toBe("");
   });
-  it("shows a waveform and Listening while recording", () => {
+  it("shows one gradient sine line while listening", () => {
     const m = render("REC");
     expect(m).toContain('data-mode="listening"');
-    expect(m).toContain(">Listening<");
-    expect(m.match(/<i /g)?.length).toBe(7);
+    expect(m).toContain('aria-label="Listening"');
+    expect(m).toContain("--w:92px");
+    expect(m).toContain("--h:34px");
+    expect(m.match(/<path/g)?.length).toBe(1);
+    expect(m).toContain("linearGradient");
+    expect(m).toContain("#ff8a4c");
+    expect(m).toContain("#b86bff");
+    expect(visibleText(m)).toBe("");
   });
-  it("shows three dots and Thinking while transcribing", () => {
+  it("settles into a flat line while thinking", () => {
     const m = render("...");
     expect(m).toContain('data-mode="thinking"');
-    expect(m).toContain(">Thinking<");
-    expect(m).toContain("ov-dots");
+    expect(m).toContain('aria-label="Thinking"');
+    expect(m.match(/<path/g)?.length).toBe(1);
+    expect(visibleText(m)).toBe("");
   });
-  it("shows the error text", () => {
+  it("never shows live text", () => {
+    const m = renderToStaticMarkup(
+      <Overlay
+        initialState={overlayStateFromText("REC")}
+        initialPartial="hello there"
+      />,
+    );
+    expect(m).not.toContain("hello there");
+    expect(m).toContain("--w:92px");
+  });
+  it("shows an error as a small red line with no text", () => {
     const m = render("Model missing", "left");
     expect(m).toContain('data-mode="error"');
     expect(m).toContain('data-pos="left"');
-    expect(m).toContain(">Model missing<");
+    expect(m).toContain("--w:60px");
+    expect(m.match(/<path/g)?.length).toBe(1);
+    expect(visibleText(m)).toBe("");
+    // The message stays available to assistive tech only.
+    expect(m).toContain('aria-label="Model missing"');
+  });
+  it("marks the lifted look while dragging", () => {
+    expect(render("")).not.toContain("data-dragging");
+    const m = renderToStaticMarkup(<Overlay initialDragging />);
+    expect(m).toContain('data-dragging="true"');
   });
 });

@@ -1,9 +1,13 @@
 pub mod audio;
+pub mod autostart;
 pub mod dictation;
+pub mod focus;
 pub mod hotkey;
 pub mod logging;
 pub mod overlay;
+pub mod overlay_drag;
 pub mod paste;
+pub mod permissions;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
@@ -38,6 +42,8 @@ pub fn tray_action(id: &str) -> TrayAction {
     match id {
         SETTINGS_ID => TrayAction::ShowSettings,
         QUIT_ID => TrayAction::Quit,
+        // Reset is the top preset: middle of the top edge, below the notch.
+        overlay::RESET_MENU_ID => TrayAction::MoveOverlay(overlay::Position::Top),
         _ => overlay::Position::from_menu_id(id)
             .map(TrayAction::MoveOverlay)
             .unwrap_or(TrayAction::Ignore),
@@ -69,9 +75,16 @@ pub fn run() {
         .plugin(hotkey::fallback::plugin(hotkey_tx.clone()))
         .invoke_handler(tauri::generate_handler![
             overlay::set_overlay_position,
-            overlay::get_overlay_position
+            overlay::get_overlay_position,
+            permissions::permissions_status,
+            permissions::open_permission_pane,
+            permissions::request_permission,
+            autostart::autostart_status,
+            autostart::set_autostart
         ])
         .setup(move |app| {
+            // First launch of the installed app turns on launch at login once.
+            autostart::on_launch(app.handle());
             let on_action = dictation::spawn(app.handle().clone());
             hotkey::start(app.handle(), hotkey_tx, hotkey_rx, on_action);
             // Menu bar app: no Dock icon on macOS.
@@ -103,10 +116,20 @@ pub fn run() {
                     .map(|item| (p, item))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let check_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> = checks
+            let mut check_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> = checks
                 .iter()
                 .map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<_>)
                 .collect();
+            let reset_sep = tauri::menu::PredefinedMenuItem::separator(app)?;
+            let reset_item = MenuItem::with_id(
+                app,
+                overlay::RESET_MENU_ID,
+                "Reset position",
+                true,
+                None::<&str>,
+            )?;
+            check_refs.push(&reset_sep);
+            check_refs.push(&reset_item);
             let notch_menu = Submenu::with_items(app, "Notch position", true, &check_refs)?;
             refs.insert(refs.len().saturating_sub(1), &notch_menu);
             let menu = Menu::with_items(app, &refs)?;
@@ -115,6 +138,8 @@ pub fn run() {
             if let Err(e) = overlay::create(app.handle(), position) {
                 tracing::warn!("notch overlay not created: {e}");
             }
+            // Drag the pill via a mouse tap; it never takes keyboard focus.
+            overlay_drag::start(app.handle());
 
             let icon: Image<'static> = tauri::include_image!("icons/32x32.png");
             TrayIconBuilder::with_id(dictation::TRAY_ID)
@@ -175,5 +200,13 @@ mod tests {
         for p in overlay::Position::ALL {
             assert_eq!(tray_action(&p.menu_id()), TrayAction::MoveOverlay(p));
         }
+    }
+
+    #[test]
+    fn reset_position_moves_the_pill_to_the_top() {
+        assert_eq!(
+            tray_action(overlay::RESET_MENU_ID),
+            TrayAction::MoveOverlay(overlay::Position::Top)
+        );
     }
 }
