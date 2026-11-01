@@ -102,7 +102,7 @@ pub fn type_edit_guarded<T: KeyTyper, G: TypingGuard>(
         typer
             .type_units(&chunk)
             .map_err(|e| fail(PasteError::InjectFailed(e), Some(typed)))?;
-        typed += String::from_utf16_lossy(&chunk).len();
+        typed += chunk.len();
     }
     Ok(EditOutcome::Done)
 }
