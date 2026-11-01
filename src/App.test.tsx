@@ -24,9 +24,11 @@ describe("App", () => {
     expect(m).not.toContain("History");
   });
 
-  it("shows Dictionary as an honest empty state", () => {
+  it("shows the Dictionary page, loading until the list arrives", () => {
     const m = renderToStaticMarkup(<App initialView="dictionary" />);
-    expect(m).toContain("Coming soon");
+    expect(m).not.toContain("Coming soon");
+    expect(m).toContain("Stored only on this Mac");
+    expect(m).toContain("Loading your dictionary...");
     expect(m).toMatch(/aria-current="page"[^>]*title="Dictionary"/);
   });
 

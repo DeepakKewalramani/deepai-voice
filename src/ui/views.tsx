@@ -1,7 +1,9 @@
 import React from "react";
 import { StatusCard } from "./StatusCard";
 import { DictationStatus } from "./status";
-import { BookIcon, LockIcon } from "./icons";
+import { LockIcon } from "./icons";
+import { DictionaryPage } from "../dictionary/DictionaryPage";
+import { UseDictionary, useDictionary } from "../dictionary/useDictionary";
 
 export const ViewHeader: React.FC<{ title: string; subtitle: string }> = ({
   title,
@@ -67,23 +69,18 @@ export const HomeView: React.FC<{
   </div>
 );
 
-export const DictionaryView: React.FC = () => (
-  <div className="view">
+export const DictionaryView: React.FC<{ dict?: UseDictionary }> = ({
+  dict,
+}) => (
+  <div className="view dict">
     <ViewHeader
       title="Dictionary"
       subtitle="Words and names you want spelled your way."
     />
-    <section className="empty-card" aria-labelledby="dictionary-empty-title">
-      <span className="empty-icon">
-        <BookIcon />
-      </span>
-      <h3 id="dictionary-empty-title" className="empty-title">
-        Coming soon
-      </h3>
-      <p className="empty-text">
-        You will be able to add names, product terms and jargon here so
-        dictation spells them correctly. This is not available yet.
-      </p>
-    </section>
+    {dict ? <DictionaryPage dict={dict} /> : <LiveDictionary />}
   </div>
+);
+
+const LiveDictionary: React.FC = () => (
+  <DictionaryPage dict={useDictionary()} />
 );

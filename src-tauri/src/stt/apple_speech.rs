@@ -107,6 +107,26 @@ pub fn map_recognition_update(
     }
 }
 
+/// Most phrases the recogniser accepts as `contextualStrings`.
+pub const MAX_CONTEXTUAL_STRINGS: usize = 100;
+
+/// Phrases for `contextualStrings`: trimmed, empty ones dropped,
+/// case-insensitive repeats dropped, at most `MAX_CONTEXTUAL_STRINGS`.
+pub fn contextual_hints(hints: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for h in hints {
+        let h = h.trim();
+        if h.is_empty() || out.iter().any(|o| o.to_lowercase() == h.to_lowercase()) {
+            continue;
+        }
+        out.push(h.to_string());
+        if out.len() == MAX_CONTEXTUAL_STRINGS {
+            break;
+        }
+    }
+    out
+}
+
 /// Frame count for a mono buffer holding `samples`. `None` for empty or oversized input.
 pub fn pcm_frame_count(samples: &[f32]) -> Option<u32> {
     if samples.is_empty() {
@@ -130,14 +150,14 @@ mod mac {
     use objc2::AnyThread;
     use objc2::rc::{Retained, autoreleasepool};
     use objc2_avf_audio::{AVAudioCommonFormat, AVAudioFormat, AVAudioPCMBuffer};
-    use objc2_foundation::{NSError, NSLocale, NSOperationQueue, NSString};
+    use objc2_foundation::{NSArray, NSError, NSLocale, NSOperationQueue, NSString};
     use objc2_speech::{
         SFSpeechAudioBufferRecognitionRequest, SFSpeechRecognitionResult, SFSpeechRecognitionTask,
         SFSpeechRecognizer, SFSpeechRecognizerAuthorizationStatus,
     };
 
     use super::*;
-    use crate::stt::streaming::{StreamingSession, StreamingStt};
+    use crate::stt::streaming::{StartOptions, StreamingSession, StreamingStt};
 
     /// How long `finish` waits for the final result before reporting `Timeout`.
     const FINISH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -278,7 +298,12 @@ mod mac {
         format: Retained<AVAudioFormat>,
     }
 
-    fn setup(locale: &str, shared: SharedSender, done: Sender<()>) -> Result<Live, ProviderError> {
+    fn setup(
+        locale: &str,
+        hints: &[String],
+        shared: SharedSender,
+        done: Sender<()>,
+    ) -> Result<Live, ProviderError> {
         let recognizer = recognizer_for(locale);
         if support_of(recognizer.as_deref()) != LocaleSupport::OnDevice {
             return Err(ProviderError::Unsupported);
@@ -291,6 +316,14 @@ mod mac {
         unsafe {
             request.setRequiresOnDeviceRecognition(true);
             request.setShouldReportPartialResults(true);
+        }
+        // Dictionary words as hints. The phrases stay in memory, never logged.
+        let phrases = contextual_hints(hints);
+        if !phrases.is_empty() {
+            let strings: Vec<Retained<NSString>> =
+                phrases.iter().map(|p| NSString::from_str(p)).collect();
+            let array = NSArray::from_retained_slice(&strings);
+            unsafe { request.setContextualStrings(&array) };
         }
 
         // Results go to a private background queue instead of the main queue.
@@ -339,12 +372,13 @@ mod mac {
 
     fn run_worker(
         locale: String,
+        hints: Vec<String>,
         commands: Receiver<Command>,
         shared: SharedSender,
         ready: SyncSender<Result<(), ProviderError>>,
     ) {
         let (done_tx, done_rx) = mpsc::channel();
-        let live = match autoreleasepool(|_| setup(&locale, shared.clone(), done_tx)) {
+        let live = match autoreleasepool(|_| setup(&locale, &hints, shared.clone(), done_tx)) {
             Ok(live) => {
                 let _ = ready.send(Ok(()));
                 live
@@ -409,6 +443,14 @@ mod mac {
 
     impl StreamingStt for AppleSpeech {
         fn start(&self, locale: &str) -> Result<Box<dyn StreamingSession>, ProviderError> {
+            self.start_with(locale, &StartOptions::default())
+        }
+
+        fn start_with(
+            &self,
+            locale: &str,
+            options: &StartOptions,
+        ) -> Result<Box<dyn StreamingSession>, ProviderError> {
             ensure_on_device(&*self.probe, locale)?;
             if self.permission.status() != SpeechPermissionStatus::Granted {
                 return Err(ProviderError::Auth(
@@ -421,9 +463,10 @@ mod mac {
             let (ready_tx, ready_rx) = mpsc::sync_channel(1);
             let shared: SharedSender = Arc::new(Mutex::new(Some(event_tx)));
             let locale = locale.to_string();
+            let hints = options.hints.clone();
             thread::Builder::new()
                 .name("apple-speech".into())
-                .spawn(move || run_worker(locale, cmd_rx, shared, ready_tx))
+                .spawn(move || run_worker(locale, hints, cmd_rx, shared, ready_tx))
                 .map_err(|e| ProviderError::Local(format!("cannot start speech worker: {e}")))?;
 
             match ready_rx.recv_timeout(READY_TIMEOUT) {

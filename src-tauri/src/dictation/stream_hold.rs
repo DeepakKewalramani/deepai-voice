@@ -8,16 +8,21 @@
 //! limited. Old sessions finish in the background while the new one already
 //! gets audio; newer events are read only after every older final, so
 //! segment finals reach the machine in order.
+//!
+//! The hold's dictionary (`HoldVocab`) is fixed at start: its words go to
+//! every session as hints, and its correction map rewrites every partial and
+//! final before the machine sees it (so typing works on corrected text only).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 
-use super::Outcome;
 use super::live::{NoiseFloor, SAMPLE_RATE, frame_rms};
 use super::state::Input;
+use super::{Outcome, apply_dictionary};
+use crate::dictionary::HoldVocab;
 use crate::stt::filters::sanitize_transcript;
-use crate::stt::streaming::{StreamEvent, StreamingSession, StreamingStt};
+use crate::stt::streaming::{StartOptions, StreamEvent, StreamingSession, StreamingStt};
 use crate::stt::trait_def::ProviderError;
 
 /// Silence after recognized text that ends a session (600 ms).
@@ -103,6 +108,7 @@ fn drain(open: &mut Open) -> Drained {
 pub struct StreamHold {
     engine: Arc<dyn StreamingStt>,
     locale: String,
+    vocab: Arc<HoldVocab>,
     seq: u64,
     current: Option<Open>,
     /// Older sessions waiting for their final, oldest first.
@@ -120,10 +126,21 @@ pub struct StreamHold {
 impl StreamHold {
     /// Opens the first session. An error means: use Whisper for this hold.
     pub fn start(engine: Arc<dyn StreamingStt>, locale: &str) -> Result<Self, ProviderError> {
-        let session = engine.start(locale)?;
+        Self::start_with_vocab(engine, locale, Arc::default())
+    }
+
+    /// Like `start`, with the hold's dictionary: hints for every session and
+    /// corrections for every output.
+    pub fn start_with_vocab(
+        engine: Arc<dyn StreamingStt>,
+        locale: &str,
+        vocab: Arc<HoldVocab>,
+    ) -> Result<Self, ProviderError> {
+        let session = engine.start_with(locale, &Self::options(&vocab))?;
         Ok(Self {
             engine,
             locale: locale.to_string(),
+            vocab,
             seq: 1,
             current: Some(Open::new(1, session)),
             closing: VecDeque::new(),
@@ -135,6 +152,19 @@ impl StreamHold {
             failed: false,
             done: false,
         })
+    }
+
+    fn options(vocab: &HoldVocab) -> StartOptions {
+        StartOptions {
+            hints: vocab.hints.clone(),
+        }
+    }
+
+    fn corrected(&self, inputs: Vec<Input>) -> Vec<Input> {
+        inputs
+            .into_iter()
+            .map(|i| apply_dictionary(i, &self.vocab))
+            .collect()
     }
 
     /// Segment number of the newest session.
@@ -167,17 +197,25 @@ impl StreamHold {
         self.session_samples = 0;
         self.silent_samples = 0;
         self.frame.clear();
-        match self.engine.start(&self.locale) {
+        match self
+            .engine
+            .start_with(&self.locale, &Self::options(&self.vocab))
+        {
             Ok(session) => self.current = Some(Open::new(self.seq, session)),
             Err(_) => self.failed = true,
         }
     }
 
     /// Audio drained while the key is held (may be empty). Returns the inputs
-    /// for the machine, in order.
+    /// for the machine, in order, with dictionary corrections applied.
     pub fn feed(&mut self, samples: &[f32]) -> Vec<Input> {
+        let raw = self.feed_raw(samples);
+        self.corrected(raw)
+    }
+
+    fn feed_raw(&mut self, samples: &[f32]) -> Vec<Input> {
         if self.released || self.done {
-            return self.poll();
+            return self.poll_raw();
         }
         if self.current.is_none() && !self.failed && !samples.is_empty() {
             self.open_next();
@@ -197,13 +235,13 @@ impl StreamHold {
                     open.finish_or_abandon();
                     self.closing.push_back(open);
                     self.open_next();
-                    out.extend(self.poll());
+                    out.extend(self.poll_raw());
                     return out;
                 }
                 self.current = Some(open);
             }
         }
-        self.poll()
+        self.poll_raw()
     }
 
     /// Newest partial of `open` as an input, only when no older session is
@@ -230,8 +268,13 @@ impl StreamHold {
         out
     }
 
-    /// Reads engine events without new audio.
+    /// Reads engine events without new audio (dictionary corrections applied).
     pub fn poll(&mut self) -> Vec<Input> {
+        let raw = self.poll_raw();
+        self.corrected(raw)
+    }
+
+    fn poll_raw(&mut self) -> Vec<Input> {
         let mut out = Vec::new();
         if self.done {
             return out;
@@ -286,6 +329,11 @@ impl StreamHold {
     /// Key released: the rest of the audio goes in and the newest session
     /// finishes. Its final arrives as `Input::Transcribed` from `poll`.
     pub fn release(&mut self, rest: &[f32]) -> Vec<Input> {
+        let raw = self.release_raw(rest);
+        self.corrected(raw)
+    }
+
+    fn release_raw(&mut self, rest: &[f32]) -> Vec<Input> {
         if self.released || self.done {
             return Vec::new();
         }
@@ -297,7 +345,7 @@ impl StreamHold {
             }
         }
         self.released = true;
-        self.poll()
+        self.poll_raw()
     }
 
     /// Esc or discard: every session stops, no further inputs.

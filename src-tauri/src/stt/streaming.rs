@@ -8,6 +8,7 @@
 //! Events carry transcript text. Callers must never log or persist it.
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::trait_def::ProviderError;
@@ -38,10 +39,29 @@ pub trait StreamingSession: Send {
     fn cancel(&mut self);
 }
 
+/// Options for one session. `Default` means no hints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StartOptions {
+    /// Phrases the engine should favour (dictionary words), at most 100.
+    /// Never logged.
+    pub hints: Vec<String>,
+}
+
 /// A streaming speech to text engine.
 pub trait StreamingStt: Send + Sync {
     /// Opens a session for a BCP-47 locale such as "en-US".
     fn start(&self, locale: &str) -> Result<Box<dyn StreamingSession>, ProviderError>;
+
+    /// Opens a session with options. Engines without hint support ignore
+    /// them; the default does exactly what `start` does.
+    fn start_with(
+        &self,
+        locale: &str,
+        options: &StartOptions,
+    ) -> Result<Box<dyn StreamingSession>, ProviderError> {
+        let _ = options;
+        self.start(locale)
+    }
 
     /// Human-readable name used in logs.
     fn name(&self) -> &str;
@@ -75,6 +95,9 @@ pub struct FakeStreamingStt {
     words: Vec<String>,
     start_error: Option<ProviderError>,
     finish_error: Option<ProviderError>,
+    final_text: Option<String>,
+    /// Hints of every `start_with` call, in order.
+    hints_seen: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 impl FakeStreamingStt {
@@ -83,7 +106,24 @@ impl FakeStreamingStt {
             words: words.iter().map(|w| w.to_string()).collect(),
             start_error: None,
             finish_error: None,
+            final_text: None,
+            hints_seen: Arc::default(),
         }
+    }
+
+    /// `finish` sends this text as `Final` instead of every scripted word
+    /// (a revision of the last partial).
+    pub fn with_final(mut self, text: &str) -> Self {
+        self.final_text = Some(text.to_string());
+        self
+    }
+
+    /// Hints received by each `start_with` call so far.
+    pub fn hints_seen(&self) -> Vec<Vec<String>> {
+        self.hints_seen
+            .lock()
+            .map(|h| h.clone())
+            .unwrap_or_default()
     }
 
     /// `start` fails with this error.
@@ -109,9 +149,21 @@ impl StreamingStt for FakeStreamingStt {
             words: self.words.clone(),
             shown: 0,
             finish_error: self.finish_error.clone(),
+            final_text: self.final_text.clone(),
             tx: Some(tx),
             rx,
         }))
+    }
+
+    fn start_with(
+        &self,
+        locale: &str,
+        options: &StartOptions,
+    ) -> Result<Box<dyn StreamingSession>, ProviderError> {
+        if let Ok(mut seen) = self.hints_seen.lock() {
+            seen.push(options.hints.clone());
+        }
+        self.start(locale)
     }
 
     fn name(&self) -> &str {
@@ -123,6 +175,7 @@ struct FakeSession {
     words: Vec<String>,
     shown: usize,
     finish_error: Option<ProviderError>,
+    final_text: Option<String>,
     tx: Option<Sender<StreamEvent>>,
     rx: Receiver<StreamEvent>,
 }
@@ -151,7 +204,11 @@ impl StreamingSession for FakeSession {
             .ok_or_else(|| ProviderError::BadRequest("session already ended".into()))?;
         let event = match self.finish_error.take() {
             Some(err) => StreamEvent::Error(err),
-            None => StreamEvent::Final(self.words.join(" ")),
+            None => StreamEvent::Final(
+                self.final_text
+                    .take()
+                    .unwrap_or_else(|| self.words.join(" ")),
+            ),
         };
         let _ = tx.send(event);
         Ok(())

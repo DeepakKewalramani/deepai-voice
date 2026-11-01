@@ -3,9 +3,11 @@
 //! runs finals before partials. Audio stays in memory and is never logged.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::Outcome;
+use crate::dictionary::HoldVocab;
 use crate::stt::filters::{MIN_DURATION_SAMPLES, sanitize_transcript};
 
 /// 16 kHz mono, the rate the recorder hands out.
@@ -291,6 +293,8 @@ pub struct JobQueue {
     hold: u64,
     /// How long the last partial pass took.
     partial_cost: Duration,
+    /// Dictionary of the hold, read once at hold start.
+    vocab: Arc<HoldVocab>,
 }
 
 impl JobQueue {
@@ -345,8 +349,19 @@ impl JobQueue {
     /// A new hold starts: drops all queued work of earlier holds. Jobs taken
     /// from now on belong to `hold`; a job already running keeps its old id.
     pub fn begin_hold(&mut self, hold: u64) {
+        self.begin_hold_with(hold, Arc::default());
+    }
+
+    /// Like `begin_hold`, with the hold's dictionary (`vocab`).
+    pub fn begin_hold_with(&mut self, hold: u64, vocab: Arc<HoldVocab>) {
         self.clear();
         self.hold = hold;
+        self.vocab = vocab;
+    }
+
+    /// Dictionary of the queued jobs' hold. Read it with `take_next`.
+    pub fn vocab(&self) -> Arc<HoldVocab> {
+        self.vocab.clone()
     }
 
     /// Hold of the jobs in the queue. Read it together with `take_next`

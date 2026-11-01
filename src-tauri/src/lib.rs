@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod autostart;
 pub mod dictation;
+pub mod dictionary;
 pub mod focus;
 pub mod hotkey;
 pub mod logging;
@@ -90,6 +91,11 @@ pub fn run() {
             providers::commands::delete_custom_provider,
             providers::commands::open_provider_docs,
             providers::commands::test_provider,
+            dictionary::commands::dictionary_list,
+            dictionary::commands::dictionary_add,
+            dictionary::commands::dictionary_update,
+            dictionary::commands::dictionary_delete,
+            dictionary::commands::dictionary_add_many
         ])
         .setup(move |app| {
             // First launch of the installed app turns on launch at login once.

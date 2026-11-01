@@ -84,13 +84,31 @@ pub fn partial_audio_ctx(samples: usize) -> i32 {
     (frames.min(MAX_AUDIO_CTX as usize) as i32).max(MIN_AUDIO_CTX)
 }
 
+/// Longest vocabulary hint passed to the model, in tokens. Whisper keeps at
+/// most half its 448 token text context for the prompt.
+pub const MAX_HINT_TOKENS: usize = 200;
+
+/// Token buffer size for `hint`: never smaller than the number of tokens a
+/// byte-level tokenizer can produce (one per byte, plus a little slack).
+pub fn token_buffer_len(hint: &str) -> usize {
+    hint.len() + 16
+}
+
+/// The hint actually used: None for no hint or a blank one (no prompt at all,
+/// exactly as before hints existed), and never text with a NUL character.
+pub fn effective_hint(hint: Option<&str>) -> Option<&str> {
+    hint.map(str::trim)
+        .filter(|h| !h.is_empty() && !h.contains('\0'))
+}
+
 /// A loaded Whisper model and its reusable decode state.
 pub struct LocalWhisper {
-    // `state` keeps its own handle to the context; the context is kept for clarity.
-    _ctx: WhisperContext,
+    ctx: WhisperContext,
     state: WhisperState,
     threads: usize,
     load_time: Duration,
+    /// Last hint and its tokens, so a hold's hint is tokenized once.
+    hint_tokens: Option<(String, Vec<i32>)>,
 }
 
 impl LocalWhisper {
@@ -112,10 +130,11 @@ impl LocalWhisper {
             .create_state()
             .map_err(|e| WhisperError::Load(e.to_string()))?;
         let mut engine = Self {
-            _ctx: ctx,
+            ctx,
             state,
             threads: threads.max(1),
             load_time: Duration::ZERO,
+            hint_tokens: None,
         };
         // Warm-up: one second of silence so the first real call is not cold.
         engine.transcribe_timed(&vec![0.0; SAMPLE_RATE])?;
@@ -141,17 +160,64 @@ impl LocalWhisper {
     /// Fast, less exact pass for live partials: reduced audio context
     /// (`partial_audio_ctx`). Finals keep the full context.
     pub fn transcribe_partial(&mut self, samples: &[f32]) -> Result<String> {
-        self.run(samples, Some(partial_audio_ctx(samples.len())))
-            .map(|t| t.text)
+        self.transcribe_partial_with_hint(samples, None)
     }
 
     /// Like [`LocalWhisper::transcribe`], with timing. Logs lengths and durations only.
     pub fn transcribe_timed(&mut self, samples: &[f32]) -> Result<Transcript> {
-        self.run(samples, None)
+        self.run(samples, None, None)
     }
 
-    fn run(&mut self, samples: &[f32], audio_ctx: Option<i32>) -> Result<Transcript> {
+    /// [`LocalWhisper::transcribe`] with an optional vocabulary hint (the
+    /// initial prompt). `None` behaves exactly like `transcribe`.
+    pub fn transcribe_with_hint(&mut self, samples: &[f32], hint: Option<&str>) -> Result<String> {
+        self.run(samples, None, hint).map(|t| t.text)
+    }
+
+    /// [`LocalWhisper::transcribe_partial`] with an optional vocabulary hint.
+    pub fn transcribe_partial_with_hint(
+        &mut self,
+        samples: &[f32],
+        hint: Option<&str>,
+    ) -> Result<String> {
+        self.run(samples, Some(partial_audio_ctx(samples.len())), hint)
+            .map(|t| t.text)
+    }
+
+    /// Tokens of `hint`, cached for the next call with the same hint. The
+    /// same tokenizer whisper.cpp uses for its initial prompt; passing tokens
+    /// avoids a per-call allocation that whisper-rs never frees.
+    fn hint_tokens(&mut self, hint: Option<&str>) -> Result<Option<&[i32]>> {
+        let Some(hint) = effective_hint(hint) else {
+            return Ok(None);
+        };
+        if self.hint_tokens.as_ref().is_none_or(|(h, _)| h != hint) {
+            // whisper.cpp returns minus the token count when the buffer is too
+            // small and whisper-rs then treats that as a length. A byte-level
+            // tokenizer never makes more tokens than bytes, so size the buffer
+            // from the byte length and cut to the cap afterwards.
+            let mut tokens = self
+                .ctx
+                .tokenize(hint, token_buffer_len(hint))
+                .map_err(|e| WhisperError::Transcribe(e.to_string()))?;
+            tokens.truncate(MAX_HINT_TOKENS);
+            self.hint_tokens = Some((hint.to_string(), tokens));
+        }
+        Ok(self.hint_tokens.as_ref().map(|(_, t)| t.as_slice()))
+    }
+
+    fn run(
+        &mut self,
+        samples: &[f32],
+        audio_ctx: Option<i32>,
+        hint: Option<&str>,
+    ) -> Result<Transcript> {
+        // A hint that cannot be tokenized is dropped: transcribe without it.
+        let tokens = self.hint_tokens(hint).ok().flatten().map(<[i32]>::to_vec);
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        if let Some(tokens) = tokens.as_deref() {
+            params.set_tokens(tokens);
+        }
         params.set_n_threads(self.threads as i32);
         if let Some(ctx) = audio_ctx {
             params.set_audio_ctx(ctx);
@@ -177,10 +243,11 @@ impl LocalWhisper {
         let elapsed = started.elapsed();
         let audio = Duration::from_secs_f64(samples.len() as f64 / SAMPLE_RATE as f64);
         tracing::info!(
-            "local_whisper event=transcribed audio_ms={} elapsed_ms={} audio_ctx={} chars={}",
+            "local_whisper event=transcribed audio_ms={} elapsed_ms={} audio_ctx={} hint_tokens={} chars={}",
             audio.as_millis(),
             elapsed.as_millis(),
             audio_ctx.unwrap_or(0),
+            tokens.as_ref().map_or(0, Vec::len),
             text.chars().count()
         );
         Ok(Transcript {
@@ -193,6 +260,15 @@ impl LocalWhisper {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn token_buffer_covers_one_token_per_byte_so_the_library_never_sees_a_negative_count() {
+        // 400 Devanagari characters are 1200 bytes; the old fixed buffer of
+        // 200 tokens was far too small for that.
+        let hint = "\u{0926}".repeat(400);
+        assert!(super::token_buffer_len(&hint) >= hint.len());
+        assert!(super::token_buffer_len("") >= 1);
+    }
+
     use super::*;
 
     #[test]
@@ -222,6 +298,18 @@ mod tests {
         assert_eq!(partial_audio_ctx(SAMPLE_RATE * 6 + 1), 301);
         assert_eq!(partial_audio_ctx(SAMPLE_RATE * 30), MAX_AUDIO_CTX);
         assert_eq!(partial_audio_ctx(SAMPLE_RATE * 60), MAX_AUDIO_CTX);
+    }
+
+    #[test]
+    fn no_hint_or_blank_hint_means_no_prompt_at_all() {
+        assert_eq!(effective_hint(None), None);
+        assert_eq!(effective_hint(Some("")), None);
+        assert_eq!(effective_hint(Some("   ")), None);
+        assert_eq!(effective_hint(Some("bad\0hint")), None);
+        assert_eq!(
+            effective_hint(Some(" Vocabulary: Deepak ")),
+            Some("Vocabulary: Deepak")
+        );
     }
 
     #[test]

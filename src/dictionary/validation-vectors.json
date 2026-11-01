@@ -1,0 +1,78 @@
+{
+  "limits": {
+    "maxEntries": 500,
+    "maxWordChars": 60,
+    "maxHeardAs": 5,
+    "maxHeardAsChars": 60,
+    "maxNoteChars": 80
+  },
+  "word": {
+    "valid": [
+      ["Deepak", "Deepak"],
+      ["  DeepakKewalramani  ", "DeepakKewalramani"],
+      ["दीपक", "दीपक"],
+      ["Zoë", "Zoë"],
+      ["DeepakKewalramani Tech", "DeepakKewalramani Tech"],
+      [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      [
+        "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+        "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+      ]
+    ],
+    "invalid": [
+      "",
+      "   ",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bad\u0007word",
+      "two\nlines",
+      "tab\there"
+    ]
+  },
+  "heardAs": {
+    "valid": [
+      [["people"], ["people"]],
+      [
+        [" people ", "deep pack"],
+        ["people", "deep pack"]
+      ],
+      [[], []],
+      [["", "  "], []],
+      [["People", "people"], ["People"]],
+      [
+        ["a", "b", "c", "d", "e"],
+        ["a", "b", "c", "d", "e"]
+      ],
+      [
+        ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      ]
+    ],
+    "invalid": [
+      ["a", "b", "c", "d", "e", "f"],
+      ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      ["new\nline"]
+    ]
+  },
+  "language": {
+    "valid": ["any", "en", "hi", "mr"],
+    "invalid": ["", "EN", "english", "e1", "any "]
+  },
+  "note": {
+    "valid": [
+      ["", null],
+      ["   ", null],
+      ["  my name ", "my name"],
+      [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    ],
+    "invalid": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "a\u0000b"
+    ]
+  }
+}

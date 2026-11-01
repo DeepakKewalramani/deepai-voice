@@ -25,6 +25,11 @@
 //! loaded lazily on first use; one typing thread runs edits in order. The
 //! hotkey thread only sends a message. Dictated text and audio are never
 //! logged or written to disk.
+//!
+//! Dictionary: read once at each hold start (`HoldVocab`), so an edit takes
+//! effect at the next hold. Its words are hints for Whisper and the
+//! streaming engine; its correction map rewrites every partial and final
+//! before the machine types it.
 
 pub mod engine;
 pub mod live;
@@ -44,6 +49,7 @@ use crate::audio::{
     AudioCaptureConfig, AudioCaptureSession, MicPermissionStatus, check_microphone_permission,
     request_microphone_permission,
 };
+use crate::dictionary::HoldVocab;
 use crate::focus::{FocusProbe, Gate, ProbeGuard, Snapshot, StopReason, SystemProbe, TypingGuard};
 use crate::hotkey::HotkeyAction;
 use crate::paste::PasteError;
@@ -128,6 +134,35 @@ pub fn resolve_model_path(
     }
     candidates.push(PathBuf::from(MODEL_FILE));
     candidates.into_iter().find(|p| exists(p))
+}
+
+/// Language of the dictionary entries used in a hold. Both engines run
+/// English today (Whisper base.en, streaming en-IN or en-US).
+const DICTIONARY_LANGUAGE: &str = "en";
+
+/// Applies the hold's dictionary corrections to the text of a partial or
+/// final. Other inputs pass through unchanged.
+pub fn apply_dictionary(input: Input, vocab: &HoldVocab) -> Input {
+    let fix = |outcome: Outcome| match outcome {
+        Outcome::Text(t) => Outcome::Text(vocab.correct(&t)),
+        other => other,
+    };
+    match input {
+        Input::Partial { seq, text } => Input::Partial {
+            seq,
+            text: vocab.correct(&text),
+        },
+        Input::StreamPartial { seq, text } => Input::StreamPartial {
+            seq,
+            text: vocab.correct(&text),
+        },
+        Input::Segment { seq, outcome } => Input::Segment {
+            seq,
+            outcome: fix(outcome),
+        },
+        Input::Transcribed(outcome) => Input::Transcribed(fix(outcome)),
+        other => other,
+    }
 }
 
 /// Filters audio, runs `transcribe` only on real speech, then sanitizes.
@@ -456,10 +491,10 @@ impl EnginePicker {
 
     /// Streaming state for a new hold, or None for Whisper. The reason for
     /// Whisper is logged as a fixed string.
-    fn start_stream(&mut self) -> Option<StreamHold> {
+    fn start_stream(&mut self, vocab: Arc<HoldVocab>) -> Option<StreamHold> {
         let reason = match (self.choose(), self.engine.clone()) {
             (EngineChoice::Streaming, Some(engine)) => {
-                match StreamHold::start(engine, stream_locale()) {
+                match StreamHold::start_with_vocab(engine, stream_locale(), vocab) {
                     Ok(stream) => {
                         tracing::info!("dictation engine=streaming");
                         return Some(stream);
@@ -475,7 +510,12 @@ impl EnginePicker {
     }
 }
 
-fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs) {
+fn recorder_thread(
+    rx: Receiver<RecCmd>,
+    inbox: Sender<Input>,
+    jobs: SharedJobs,
+    dictionary_dir: Option<PathBuf>,
+) {
     let mut hold: Option<Hold> = None;
     let mut hold_id = 0;
     let mut last_error: Option<String> = None;
@@ -534,14 +574,23 @@ fn recorder_thread(rx: Receiver<RecCmd>, inbox: Sender<Input>, jobs: SharedJobs)
                 }
                 hold_id = id;
                 last_error = None;
-                with_jobs(&jobs, |q| q.begin_hold(id));
+                // Read once per hold: edits apply from the next hold.
+                let vocab = Arc::new(HoldVocab::load(
+                    dictionary_dir.as_deref(),
+                    DICTIONARY_LANGUAGE,
+                ));
+                with_jobs(&jobs, |q| q.begin_hold_with(id, vocab.clone()));
                 match mic_gate(check_microphone_permission()) {
                     MicGate::Go => {
                         match AudioCaptureSession::start(AudioCaptureConfig::default()) {
                             Ok(session) => {
                                 // Capture runs first, so no audio is lost
                                 // while the engine starts.
-                                hold = Some(Hold::new(session, noise_floor, picker.start_stream()))
+                                hold = Some(Hold::new(
+                                    session,
+                                    noise_floor,
+                                    picker.start_stream(vocab.clone()),
+                                ))
                             }
                             Err(_) => last_error = Some("Mic unavailable".into()),
                         }
@@ -600,19 +649,20 @@ fn ensure_model(model: &mut Option<LocalWhisper>) -> Result<&mut LocalWhisper, S
 fn whisper_thread(jobs: SharedJobs, inbox: Sender<Input>) {
     let mut model: Option<LocalWhisper> = None;
     loop {
-        let (hold, job) = {
+        let (hold, vocab, job) = {
             let (lock, cvar) = &*jobs;
             let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
             loop {
                 if let Some(job) = q.take_next() {
-                    break (q.hold(), job);
+                    break (q.hold(), q.vocab(), job);
                 }
                 q = cvar.wait(q).unwrap_or_else(|e| e.into_inner());
             }
         };
+        let hint = vocab.whisper_hint();
         let transcribe = |s: &[f32]| {
             ensure_model(&mut model)?
-                .transcribe(s)
+                .transcribe_with_hint(s, hint)
                 .map_err(|_| "Transcription failed".to_string())
         };
         let input = match job {
@@ -629,7 +679,7 @@ fn whisper_thread(jobs: SharedJobs, inbox: Sender<Input>) {
                 // Reduced audio context: much cheaper for short audio.
                 let fast = |s: &[f32]| {
                     ensure_model(&mut model)?
-                        .transcribe_partial(s)
+                        .transcribe_partial_with_hint(s, hint)
                         .map_err(|_| "Transcription failed".to_string())
                 };
                 let outcome = live::process_segment(&samples, fast);
@@ -643,6 +693,7 @@ fn whisper_thread(jobs: SharedJobs, inbox: Sender<Input>) {
         };
         with_jobs(&jobs, |q| q.done());
         if let Some(input) = input {
+            let input = apply_dictionary(input, &vocab);
             let _ = inbox.send(tag(hold, input));
         }
     }
@@ -786,7 +837,9 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>) -> impl Fn(HotkeyAction) + Send + 's
     let jobs: SharedJobs = Arc::new((Mutex::new(JobQueue::default()), Condvar::new()));
 
     let (inbox, q) = (inbox_tx.clone(), jobs.clone());
-    std::thread::spawn(move || recorder_thread(rec_rx, inbox, q));
+    // Same folder as overlay.json; None means no dictionary for any hold.
+    let dictionary_dir = app.path().app_data_dir().ok();
+    std::thread::spawn(move || recorder_thread(rec_rx, inbox, q, dictionary_dir));
     let inbox = inbox_tx.clone();
     std::thread::spawn(move || whisper_thread(jobs, inbox));
     // Id of the last hold cancelled with Esc (0: none).
