@@ -1,9 +1,12 @@
 //! Notch-style floating status pill. A second, borderless, transparent,
 //! click-through window that the frontend renders as a black pill and drives
-//! from the `dictation-status` event. The pill sits on one screen edge (top,
-//! bottom, left or right) at an offset along that edge; the tray presets and
-//! a drag (see `overlay_drag`) change it, and the choice is saved to
-//! `overlay.json` in the app data dir.
+//! from the `dictation-status` event. The pill sits on exactly one of four
+//! anchors: the middle of the top (below the notch, the default), bottom,
+//! left or right screen edge. On the left and right anchors the capsule is
+//! turned 90 degrees and the window is swapped to the upright size. The
+//! tray presets and a drag (see `overlay_drag`, which snaps to the nearest
+//! anchor) change it, and the choice is saved to `overlay.json` in the app
+//! data dir.
 //!
 //! Coordinates: every rect and origin here is in logical points with the
 //! origin at the top-left of the primary display and y growing down. On
@@ -16,27 +19,32 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::menu::CheckMenuItem;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl,
+    WebviewWindowBuilder,
 };
 
 /// Label of the overlay window. The frontend renders the pill for this label.
 pub const OVERLAY_WINDOW: &str = "overlay";
-/// Overlay window size in logical pixels: the widest capsule (listening,
-/// 92 x 36) plus room for its soft shadow and the drag lift.
-pub const OVERLAY_WIDTH: f64 = 120.0;
-pub const OVERLAY_HEIGHT: f64 = 56.0;
-/// Gap between the window and the screen edge for non-top positions.
+/// Overlay window size in logical pixels for a horizontal capsule (top and
+/// bottom): the widest capsule (listening, 116 x 26) plus room for its soft
+/// shadow and the drag lift. Left and right use it swapped (44 x 144).
+pub const OVERLAY_WIDTH: f64 = 144.0;
+pub const OVERLAY_HEIGHT: f64 = 44.0;
+/// Square window used only while the snap animation turns the capsule
+/// between horizontal and upright, so no angle of the turn is clipped.
+pub const TURN_WINDOW: (f64, f64) = (OVERLAY_WIDTH, OVERLAY_WIDTH);
+/// Gap between the window and the screen edge for non-top anchors.
 pub const EDGE_MARGIN: f64 = 12.0;
 /// Top position: the window starts at the notch band's lower edge; the
 /// capsule sits 8 px inside it (overlay.css `--ov-inset`), so its top is
-/// about 40 px below the screen edge and fully visible on notched displays.
+/// 40 px below the screen edge and fully visible on notched displays.
 pub const TOP_OFFSET: f64 = 32.0;
 /// Gap between the capsule and the window edge it is parked against
 /// (overlay.css `--ov-inset`).
 pub const CAPSULE_INSET: f64 = 8.0;
 /// Capsule size used for hit testing until the frontend reports one: the
 /// idle capsule (overlay state.ts `capsuleSize`).
-pub const DEFAULT_CAPSULE: (f64, f64) = (60.0, 30.0);
+pub const DEFAULT_CAPSULE: (f64, f64) = (76.0, 24.0);
 /// Event sent to the overlay when its position changes (payload: "top" etc).
 pub const POSITION_EVENT: &str = "overlay-position";
 /// File in the app data dir that stores the chosen position.
@@ -96,10 +104,27 @@ impl Position {
     pub fn from_menu_id(id: &str) -> Option<Position> {
         id.strip_prefix("overlay-pos-").and_then(Position::parse)
     }
+
+    /// True on the left and right anchors, where the capsule stands upright.
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Position::Left | Position::Right)
+    }
+}
+
+/// Window size for the capsule orientation at `pos`: 144 x 44 on top and
+/// bottom, swapped to 44 x 144 on left and right.
+pub fn window_size_for(pos: Position) -> (f64, f64) {
+    if pos.is_vertical() {
+        (OVERLAY_HEIGHT, OVERLAY_WIDTH)
+    } else {
+        (OVERLAY_WIDTH, OVERLAY_HEIGHT)
+    }
 }
 
 /// Where the pill sits: an edge plus how far along it, 0..1 (0 is the
-/// left or top end, 0.5 the middle).
+/// left or top end, 0.5 the middle). Only the four anchors (offset 0.5)
+/// are used now; other offsets come from old `overlay.json` files and are
+/// turned into an anchor by `normalise_placement`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placement {
     pub edge: Position,
@@ -186,7 +211,65 @@ pub fn overlay_origin(screen: Screen, win_w: f64, win_h: f64, pos: Position) -> 
     placement_origin(screen, win_w, win_h, Placement::preset(pos))
 }
 
-/// Logical top-left of the window for `placement` on `screen`.
+/// The window rect of anchor `pos` on `screen` for a window of `size`
+/// (normally `window_size_for(pos)`): top centred `TOP_OFFSET` below the
+/// top edge (clear of the notch), the others centred on their edge with
+/// `EDGE_MARGIN` of gap. Logical points; the scale comes from `screen`.
+pub fn anchor_window_rect(pos: Position, screen: Screen, size: (f64, f64)) -> Rect {
+    let (x, y) = overlay_origin(screen, size.0, size.1, pos);
+    Rect {
+        x,
+        y,
+        w: size.0,
+        h: size.1,
+    }
+}
+
+/// The anchor a dropped capsule snaps to, from its centre `center`.
+///
+/// The drop is compared with the four screen edges as a fraction of the
+/// screen size: the side edges win when the centre is relatively nearer a
+/// side than the top or bottom (so at mid height the left half snaps left
+/// and the right half snaps right on any aspect ratio). Ties go to the top
+/// or bottom edge, and top beats bottom. A non-finite point goes to Top.
+pub fn nearest_anchor(center: (f64, f64), screen: Screen) -> Position {
+    let (sx, sy, sw, sh) = screen.logical();
+    if !(center.0.is_finite() && center.1.is_finite() && sw > 0.0 && sh > 0.0) {
+        return Position::Top;
+    }
+    let left = (center.0 - sx).max(0.0);
+    let right = (sx + sw - center.0).max(0.0);
+    let top = (center.1 - sy).max(0.0);
+    let bottom = (sy + sh - center.1).max(0.0);
+    let dx = left.min(right) / sw;
+    let dy = top.min(bottom) / sh;
+    if dx < dy {
+        if left <= right {
+            Position::Left
+        } else {
+            Position::Right
+        }
+    } else if top <= bottom {
+        Position::Top
+    } else {
+        Position::Bottom
+    }
+}
+
+/// The anchor for a saved placement. An anchor (offset 0.5) is kept; an old
+/// free placement is placed as it used to be (horizontal window, offset
+/// along the edge) and moved to the anchor nearest to its centre.
+pub fn normalise_placement(placement: Placement, screen: Screen) -> Position {
+    if (clamp_offset(placement.offset) - 0.5).abs() < 1e-9 {
+        return placement.edge;
+    }
+    let (w, h) = (OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    let (x, y) = placement_origin(screen, w, h, placement);
+    nearest_anchor((x + w / 2.0, y + h / 2.0), screen)
+}
+
+/// Logical top-left of the window for `placement` on `screen` (legacy free
+/// placement along an edge; anchors use `anchor_window_rect`).
 pub fn placement_origin(
     screen: Screen,
     win_w: f64,
@@ -215,66 +298,60 @@ pub fn placement_origin(
 }
 
 /// The visible capsule inside the overlay window at logical `window` origin,
-/// laid out as overlay.css does for `edge`. `capsule` is the (width, height)
+/// laid out as overlay.css does for `edge` in its normal window
+/// (`window_size_for(edge)`). `capsule` is the unrotated (width, height)
 /// the frontend reported; `None` uses the idle size.
 pub fn capsule_rect(window: (f64, f64), edge: Position, capsule: Option<(f64, f64)>) -> Rect {
+    capsule_rect_in(window, window_size_for(edge), edge, capsule)
+}
+
+/// `capsule_rect` for a window of any `size` (the square turn window
+/// included). Top and bottom: centred across, `CAPSULE_INSET` from the top
+/// or bottom. Left and right: turned upright (width and height swapped)
+/// and centred in the window.
+pub fn capsule_rect_in(
+    window: (f64, f64),
+    size: (f64, f64),
+    edge: Position,
+    capsule: Option<(f64, f64)>,
+) -> Rect {
     let (w, h) = match capsule {
         Some((w, h)) if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 => {
-            (w.min(OVERLAY_WIDTH), h.min(OVERLAY_HEIGHT))
+            // At most the window less the inset on both sides, so the
+            // capsule never reaches past the window edge.
+            (
+                w.min(OVERLAY_WIDTH - 2.0 * CAPSULE_INSET),
+                h.min(OVERLAY_HEIGHT - 2.0 * CAPSULE_INSET),
+            )
         }
         _ => DEFAULT_CAPSULE,
     };
     let (ox, oy) = window;
-    let mid_x = ox + (OVERLAY_WIDTH - w) / 2.0;
-    let mid_y = oy + (OVERLAY_HEIGHT - h) / 2.0;
+    let (ww, wh) = size;
+    let (w, h) = if edge.is_vertical() { (h, w) } else { (w, h) };
+    let mid_x = ox + (ww - w) / 2.0;
+    let mid_y = oy + (wh - h) / 2.0;
     let (x, y) = match edge {
         Position::Top => (mid_x, oy + CAPSULE_INSET),
-        Position::Bottom => (mid_x, oy + OVERLAY_HEIGHT - CAPSULE_INSET - h),
-        Position::Left => (ox + CAPSULE_INSET, mid_y),
-        Position::Right => (ox + OVERLAY_WIDTH - CAPSULE_INSET - w, mid_y),
+        Position::Bottom => (mid_x, oy + wh - CAPSULE_INSET - h),
+        Position::Left | Position::Right => (mid_x, mid_y),
     };
     Rect { x, y, w, h }
 }
 
+/// Origin of the square turn window that shows a capsule laid out for
+/// `edge` with its centre at `center`. Used by the snap animation: the
+/// capsule keeps its place when the window switches to the turn square,
+/// and again when it shrinks to the anchor's own size.
+pub fn turn_origin(center: (f64, f64), edge: Position, capsule: Option<(f64, f64)>) -> (f64, f64) {
+    let (cx, cy) = capsule_rect_in((0.0, 0.0), TURN_WINDOW, edge, capsule).center();
+    (center.0 - cx, center.1 - cy)
+}
+
 /// Placement for a pill dropped with its capsule centre at `center`: the
-/// nearest screen edge, with the offset along it clamped to 0..1.
-pub fn snap_placement(screen: Screen, win_w: f64, win_h: f64, center: (f64, f64)) -> Placement {
-    let (sx, sy, sw, sh) = screen.logical();
-    let (cx, cy) = center;
-    let distances = [
-        (Position::Top, cy - sy),
-        (Position::Bottom, sy + sh - cy),
-        (Position::Left, cx - sx),
-        (Position::Right, sx + sw - cx),
-    ];
-    let mut edge = Position::Top;
-    let mut best = f64::INFINITY;
-    for (p, d) in distances {
-        if d < best {
-            best = d;
-            edge = p;
-        }
-    }
-    let fraction = |value: f64, min: f64, max: f64| {
-        if max > min {
-            (value - min) / (max - min)
-        } else {
-            0.5
-        }
-    };
-    let offset = match edge {
-        Position::Top | Position::Bottom => fraction(
-            cx - win_w / 2.0,
-            sx + EDGE_MARGIN,
-            sx + sw - win_w - EDGE_MARGIN,
-        ),
-        Position::Left | Position::Right => fraction(
-            cy - win_h / 2.0,
-            sy + TOP_OFFSET,
-            sy + sh - win_h - TOP_OFFSET,
-        ),
-    };
-    Placement::new(edge, offset)
+/// nearest of the four anchors (always the middle of its edge).
+pub fn snap_placement(screen: Screen, center: (f64, f64)) -> Placement {
+    Placement::preset(nearest_anchor(center, screen))
 }
 
 /// The screen whose logical bounds contain the point, if any.
@@ -402,8 +479,8 @@ pub fn screen_of(monitor: &tauri::Monitor) -> Screen {
     }
 }
 
-/// Moves the overlay window to `placement` on `screen` (the primary
-/// monitor when `None`).
+/// Moves the overlay window to the anchor of `placement` on `screen` (the
+/// primary monitor when `None`), sized for its orientation.
 pub fn move_overlay_to<R: Runtime>(
     app: &AppHandle<R>,
     placement: Placement,
@@ -419,9 +496,11 @@ pub fn move_overlay_to<R: Runtime>(
             _ => return,
         },
     };
-    let (x, y) = placement_origin(screen, OVERLAY_WIDTH, OVERLAY_HEIGHT, placement);
-    let _ = window.set_position(LogicalPosition::new(x, y));
-    crate::overlay_drag::set_window_frame((x, y), placement.edge);
+    let size = window_size_for(placement.edge);
+    let r = anchor_window_rect(placement.edge, screen, size);
+    let _ = window.set_size(LogicalSize::new(size.0, size.1));
+    let _ = window.set_position(LogicalPosition::new(r.x, r.y));
+    crate::overlay_drag::set_window_frame((r.x, r.y), placement.edge);
     let _ = app.emit_to(OVERLAY_WINDOW, POSITION_EVENT, placement.edge.as_str());
 }
 
@@ -432,12 +511,13 @@ pub fn move_overlay<R: Runtime>(app: &AppHandle<R>, pos: Position) {
 
 /// Moves the overlay, saves the placement and updates the tray check marks.
 /// `screen` is the monitor to place it on (primary when `None`); only the
-/// edge and offset are saved, so a restart uses the primary monitor.
+/// anchor is saved, so a restart uses the primary monitor.
 pub fn apply_placement<R: Runtime>(
     app: &AppHandle<R>,
     placement: Placement,
     screen: Option<Screen>,
 ) {
+    let placement = Placement::preset(placement.edge);
     move_overlay_to(app, placement, screen);
     if let Some(path) = settings_path(app)
         && let Err(e) = save_placement(&path, placement)
@@ -475,13 +555,15 @@ pub fn get_overlay_position<R: Runtime>(app: AppHandle<R>) -> String {
         .unwrap_or_else(|| saved_position(&app).as_str().to_string())
 }
 
-/// Creates the overlay window and parks it on edge `pos`, at the saved
-/// offset when the saved placement is on that edge. Call from `setup`
-/// (main thread).
+/// Creates the overlay window and parks it on anchor `pos`. An old saved
+/// free placement on that edge is moved to its nearest anchor (on the
+/// primary monitor) and saved in the new form. Call from `setup` (main
+/// thread).
 pub fn create<R: Runtime>(app: &AppHandle<R>, pos: Position) -> tauri::Result<()> {
+    let (w, h) = window_size_for(pos);
     let window = WebviewWindowBuilder::new(app, OVERLAY_WINDOW, WebviewUrl::default())
         .title("DeepAI Voice Status")
-        .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+        .inner_size(w, h)
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -497,12 +579,21 @@ pub fn create<R: Runtime>(app: &AppHandle<R>, pos: Position) -> tauri::Result<()
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(&window);
     let saved = saved_placement(app);
-    let placement = if saved.edge == pos {
-        saved
-    } else {
-        Placement::preset(pos)
+    let primary = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| screen_of(&m));
+    let anchor = match primary {
+        Some(screen) if saved.edge == pos => normalise_placement(saved, screen),
+        _ => pos,
     };
-    move_overlay_to(app, placement, None);
+    if anchor != pos || saved != Placement::preset(pos) {
+        // Old free placement: move it to its anchor and save that.
+        apply_placement(app, Placement::preset(anchor), None);
+    } else {
+        move_overlay_to(app, Placement::preset(anchor), None);
+    }
     window.show()?;
     Ok(())
 }
@@ -540,10 +631,10 @@ mod tests {
 
     #[test]
     fn top_is_centred_below_the_notch_band() {
-        // 3024 / 2 = 1512 logical, (1512 - 120) / 2 = 696.
+        // 3024 / 2 = 1512 logical, (1512 - 144) / 2 = 684.
         assert_eq!(
             overlay_origin(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, Position::Top),
-            (696.0, 32.0)
+            (684.0, 32.0)
         );
     }
 
@@ -553,13 +644,13 @@ mod tests {
         let (w, h) = (OVERLAY_WIDTH, OVERLAY_HEIGHT);
         assert_eq!(
             overlay_origin(RETINA, w, h, Position::Bottom),
-            (696.0, 982.0 - 56.0 - 12.0)
+            (684.0, 982.0 - 44.0 - 12.0)
         );
-        let mid_y = (982.0 - 56.0) / 2.0;
+        let mid_y = (982.0 - 44.0) / 2.0;
         assert_eq!(overlay_origin(RETINA, w, h, Position::Left), (12.0, mid_y));
         assert_eq!(
             overlay_origin(RETINA, w, h, Position::Right),
-            (1512.0 - 120.0 - 12.0, mid_y)
+            (1512.0 - 144.0 - 12.0, mid_y)
         );
     }
 
@@ -574,7 +665,7 @@ mod tests {
         };
         assert_eq!(
             overlay_origin(screen, OVERLAY_WIDTH, OVERLAY_HEIGHT, Position::Top),
-            (1920.0 + 900.0, -100.0 + 32.0)
+            (1920.0 + 888.0, -100.0 + 32.0)
         );
     }
 
@@ -642,7 +733,7 @@ mod tests {
         );
         assert_eq!(
             placement_origin(RETINA, w, h, Placement::new(Position::Bottom, 1.0)),
-            (1512.0 - 120.0 - 12.0, 982.0 - 56.0 - 12.0)
+            (1512.0 - 144.0 - 12.0, 982.0 - 44.0 - 12.0)
         );
         // Left and right: y runs from below the notch band to the same gap
         // above the bottom.
@@ -652,7 +743,7 @@ mod tests {
         );
         assert_eq!(
             placement_origin(RETINA, w, h, Placement::new(Position::Right, 1.0)),
-            (1512.0 - 120.0 - 12.0, 982.0 - 56.0 - 32.0)
+            (1512.0 - 144.0 - 12.0, 982.0 - 44.0 - 32.0)
         );
     }
 
@@ -712,43 +803,51 @@ mod tests {
     #[test]
     fn capsule_rect_follows_the_css_layout() {
         let o = (100.0, 200.0);
-        let size = Some((92.0, 36.0));
+        let size = Some((116.0, 26.0));
+        // Top and bottom: 144 x 44 window, centred across, 8 px inset.
         assert_eq!(
             capsule_rect(o, Position::Top, size),
             Rect {
                 x: 100.0 + 14.0,
                 y: 208.0,
-                w: 92.0,
-                h: 36.0
+                w: 116.0,
+                h: 26.0
             }
         );
         assert_eq!(
             capsule_rect(o, Position::Bottom, size),
             Rect {
                 x: 114.0,
-                y: 200.0 + 56.0 - 8.0 - 36.0,
-                w: 92.0,
-                h: 36.0
+                y: 200.0 + 44.0 - 8.0 - 26.0,
+                w: 116.0,
+                h: 26.0
             }
         );
-        assert_eq!(
-            capsule_rect(o, Position::Left, size),
-            Rect {
-                x: 108.0,
-                y: 210.0,
-                w: 92.0,
-                h: 36.0
+        // Left and right (changed by the four-anchor work): the window is
+        // 44 x 144 and the capsule is turned upright, so width and height
+        // swap and it is centred in the window.
+        let upright = Rect {
+            x: 100.0 + (44.0 - 26.0) / 2.0,
+            y: 200.0 + (144.0 - 116.0) / 2.0,
+            w: 26.0,
+            h: 116.0,
+        };
+        assert_eq!(capsule_rect(o, Position::Left, size), upright);
+        assert_eq!(capsule_rect(o, Position::Right, size), upright);
+    }
+
+    #[test]
+    fn upright_hit_rect_uses_the_idle_size_and_stays_in_the_window() {
+        let r = capsule_rect((0.0, 0.0), Position::Left, None);
+        assert_eq!((r.w, r.h), (DEFAULT_CAPSULE.1, DEFAULT_CAPSULE.0));
+        for p in Position::ALL {
+            let (ww, wh) = window_size_for(p);
+            for size in [None, Some((116.0, 26.0)), Some((9000.0, 9000.0))] {
+                let r = capsule_rect((0.0, 0.0), p, size);
+                assert!(r.x >= 0.0 && r.y >= 0.0, "{p:?} {r:?}");
+                assert!(r.x + r.w <= ww && r.y + r.h <= wh, "{p:?} {r:?}");
             }
-        );
-        assert_eq!(
-            capsule_rect(o, Position::Right, size),
-            Rect {
-                x: 100.0 + 120.0 - 8.0 - 92.0,
-                y: 210.0,
-                w: 92.0,
-                h: 36.0
-            }
-        );
+        }
     }
 
     #[test]
@@ -759,6 +858,124 @@ mod tests {
         assert_eq!((bad.w, bad.h), DEFAULT_CAPSULE);
         let huge = capsule_rect((0.0, 0.0), Position::Top, Some((9000.0, 9000.0)));
         assert!(huge.w <= OVERLAY_WIDTH && huge.h <= OVERLAY_HEIGHT);
+    }
+
+    // ---- Four anchors --------------------------------------------------------
+
+    #[test]
+    fn window_size_swaps_on_the_left_and_right() {
+        assert_eq!(window_size_for(Position::Top), (144.0, 44.0));
+        assert_eq!(window_size_for(Position::Bottom), (144.0, 44.0));
+        assert_eq!(window_size_for(Position::Left), (44.0, 144.0));
+        assert_eq!(window_size_for(Position::Right), (44.0, 144.0));
+        assert!(Position::Left.is_vertical() && Position::Right.is_vertical());
+        assert!(!Position::Top.is_vertical() && !Position::Bottom.is_vertical());
+    }
+
+    #[test]
+    fn anchor_rects_sit_centred_on_each_edge() {
+        let a = |p| anchor_window_rect(p, RETINA, window_size_for(p));
+        assert_eq!(
+            a(Position::Top),
+            Rect {
+                x: 684.0,
+                y: 32.0,
+                w: 144.0,
+                h: 44.0
+            }
+        );
+        assert_eq!(
+            a(Position::Bottom),
+            Rect {
+                x: 684.0,
+                y: 982.0 - 44.0 - 12.0,
+                w: 144.0,
+                h: 44.0
+            }
+        );
+        assert_eq!(
+            a(Position::Left),
+            Rect {
+                x: 12.0,
+                y: (982.0 - 144.0) / 2.0,
+                w: 44.0,
+                h: 144.0
+            }
+        );
+        assert_eq!(
+            a(Position::Right),
+            Rect {
+                x: 1512.0 - 44.0 - 12.0,
+                y: (982.0 - 144.0) / 2.0,
+                w: 44.0,
+                h: 144.0
+            }
+        );
+        // The top capsule clears the notch band: its top is 40 px down.
+        let top = a(Position::Top);
+        assert_eq!(capsule_rect((top.x, top.y), Position::Top, None).y, 40.0);
+    }
+
+    #[test]
+    fn nearest_anchor_picks_the_nearest_edge_as_a_fraction_of_the_screen() {
+        // Logical screen 1512 x 982.
+        assert_eq!(nearest_anchor((756.0, 54.0), RETINA), Position::Top);
+        assert_eq!(nearest_anchor((500.0, 150.0), RETINA), Position::Top);
+        assert_eq!(nearest_anchor((900.0, 800.0), RETINA), Position::Bottom);
+        assert_eq!(nearest_anchor((200.0, 500.0), RETINA), Position::Left);
+        assert_eq!(nearest_anchor((1300.0, 420.0), RETINA), Position::Right);
+        // Top-left corner: 40 px is a smaller share of the width than of the
+        // height, so the left edge wins.
+        assert_eq!(nearest_anchor((40.0, 40.0), RETINA), Position::Left);
+        // Mid height: the left half snaps left and the right half snaps
+        // right (the old centre-distance rule sent these to Top).
+        assert_eq!(nearest_anchor((700.0, 491.0), RETINA), Position::Left);
+        assert_eq!(nearest_anchor((820.0, 491.0), RETINA), Position::Right);
+        // Dead centre is a tie between the sides and top: top wins.
+        assert_eq!(nearest_anchor((756.0, 491.0), RETINA), Position::Top);
+        // Not a number: the default anchor.
+        assert_eq!(nearest_anchor((f64::NAN, 3.0), RETINA), Position::Top);
+    }
+
+    #[test]
+    fn old_free_placements_are_normalised_to_the_nearest_anchor() {
+        // Anchors stay as they are.
+        for p in Position::ALL {
+            assert_eq!(normalise_placement(Placement::preset(p), RETINA), p);
+        }
+        // Old top, a quarter across: still nearest the top anchor.
+        let q = Placement::new(Position::Top, 0.25);
+        assert_eq!(normalise_placement(q, RETINA), Position::Top);
+        // Old left, at the very top: a corner, nearer the top edge as a share
+        // of the height than the left edge as a share of the width.
+        let lt = Placement::new(Position::Left, 0.0);
+        assert_eq!(normalise_placement(lt, RETINA), Position::Top);
+        // Old left, a bit above the middle: the left anchor.
+        let l = Placement::new(Position::Left, 0.4);
+        assert_eq!(normalise_placement(l, RETINA), Position::Left);
+        // Old bottom far right: a corner, nearer the bottom edge as a share
+        // of the screen height than the right edge as a share of the width.
+        let br = Placement::new(Position::Bottom, 1.0);
+        assert_eq!(normalise_placement(br, RETINA), Position::Bottom);
+        // Old right, halfway down: the right anchor.
+        let r = Placement::new(Position::Right, 0.4);
+        assert_eq!(normalise_placement(r, RETINA), Position::Right);
+    }
+
+    #[test]
+    fn turn_window_keeps_the_capsule_in_place() {
+        let size = Some((116.0, 26.0));
+        for p in Position::ALL {
+            let anchor = anchor_window_rect(p, RETINA, window_size_for(p));
+            let fin = capsule_rect((anchor.x, anchor.y), p, size);
+            let o = turn_origin(fin.center(), p, size);
+            // Same capsule rect in the square window as in the final one,
+            // so shrinking the window at the end does not move it.
+            assert_eq!(capsule_rect_in(o, TURN_WINDOW, p, size), fin, "{p:?}");
+            // And it fits the square at every angle of the turn.
+            let diag = (116.0f64.powi(2) + 26.0f64.powi(2)).sqrt();
+            assert!(diag <= TURN_WINDOW.0, "{diag}");
+        }
     }
 
     #[test]
@@ -777,42 +994,36 @@ mod tests {
     }
 
     // ---- Snap on drop --------------------------------------------------------
+    // Changed by the four-anchor work: a drop now snaps to the middle of an
+    // edge (offset 0.5), never to a free offset along it.
 
     #[test]
-    fn snap_picks_the_top_edge_and_keeps_the_x_offset() {
-        // Capsule centre near the top, a quarter of the way across.
-        let p = snap_placement(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, (414.0, 60.0));
-        assert_eq!(p.edge, Position::Top);
-        // Window x = 414 - 60 = 354; range 12..1380, (354 - 12) / 1368 = 0.25.
-        assert!((p.offset - 0.25).abs() < 1e-9, "{p:?}");
+    fn snap_picks_the_top_anchor() {
+        let p = snap_placement(RETINA, (414.0, 60.0));
+        assert_eq!(p, Placement::preset(Position::Top));
     }
 
     #[test]
-    fn snap_picks_the_bottom_edge() {
-        let p = snap_placement(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, (756.0, 960.0));
-        assert_eq!(p, Placement::new(Position::Bottom, 0.5));
+    fn snap_picks_the_bottom_anchor() {
+        let p = snap_placement(RETINA, (756.0, 960.0));
+        assert_eq!(p, Placement::preset(Position::Bottom));
     }
 
     #[test]
-    fn snap_picks_the_left_edge_and_keeps_the_y_offset() {
-        // Window y = cy - 28; range 32..894. cy = 32 + 28 + 862 * 0.75.
-        let cy = 32.0 + 28.0 + 862.0 * 0.75;
-        let p = snap_placement(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, (40.0, cy));
-        assert_eq!(p.edge, Position::Left);
-        assert!((p.offset - 0.75).abs() < 1e-9, "{p:?}");
+    fn snap_picks_the_left_anchor_with_no_offset() {
+        let p = snap_placement(RETINA, (40.0, 700.0));
+        assert_eq!(p, Placement::preset(Position::Left));
     }
 
     #[test]
-    fn snap_picks_the_right_edge_and_clamps_the_offset() {
-        let p = snap_placement(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, (1500.0, 500.0));
-        assert_eq!(p.edge, Position::Right);
-        // Far below the top of the range is clamped, never negative.
-        let high = snap_placement(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, (1505.0, 40.0));
-        assert_eq!(high.edge, Position::Right);
-        assert_eq!(high.offset, 0.0);
-        // Dropped past the screen corner still clamps to 0..1.
-        let off = snap_placement(RETINA, OVERLAY_WIDTH, OVERLAY_HEIGHT, (5000.0, 2000.0));
-        assert!((0.0..=1.0).contains(&off.offset), "{off:?}");
+    fn snap_picks_the_right_anchor_and_never_a_free_offset() {
+        let p = snap_placement(RETINA, (1500.0, 500.0));
+        assert_eq!(p, Placement::preset(Position::Right));
+        let high = snap_placement(RETINA, (1505.0, 40.0));
+        assert_eq!(high, Placement::preset(Position::Right));
+        // Dropped past the screen corner still lands on an anchor.
+        let off = snap_placement(RETINA, (5000.0, 2000.0));
+        assert_eq!(off.offset, 0.5);
     }
 
     #[test]
@@ -825,9 +1036,10 @@ mod tests {
             height: 1080.0,
             scale: 1.0,
         };
-        let p = snap_placement(ext, OVERLAY_WIDTH, OVERLAY_HEIGHT, (1512.0 + 30.0, 540.0));
-        assert_eq!(p.edge, Position::Left);
-        assert!((p.offset - 0.5).abs() < 0.01, "{p:?}");
+        let p = snap_placement(ext, (1512.0 + 30.0, 540.0));
+        assert_eq!(p, Placement::preset(Position::Left));
+        let r = anchor_window_rect(Position::Left, ext, window_size_for(Position::Left));
+        assert_eq!((r.x, r.y), (1512.0 + 12.0, (1080.0 - 144.0) / 2.0));
     }
 
     // ---- Monitors ------------------------------------------------------------
@@ -855,7 +1067,7 @@ mod tests {
         assert_eq!(clamp_to_screen(RETINA, w, h, (-40.0, -9.0)), (0.0, 0.0));
         assert_eq!(
             clamp_to_screen(RETINA, w, h, (1500.0, 990.0)),
-            (1512.0 - 120.0, 982.0 - 56.0)
+            (1512.0 - 144.0, 982.0 - 44.0)
         );
         assert_eq!(
             clamp_to_screen(RETINA, w, h, (300.0, 400.0)),
@@ -866,11 +1078,12 @@ mod tests {
     #[test]
     fn capsule_size_payload_is_parsed_and_checked() {
         assert_eq!(
-            parse_capsule_size(r#"{"width":92,"height":36}"#),
-            Some((92.0, 36.0))
+            parse_capsule_size(r#"{"width":116,"height":26}"#),
+            Some((116.0, 26.0))
         );
-        assert_eq!(parse_capsule_size(r#"{"width":0,"height":36}"#), None);
-        assert_eq!(parse_capsule_size(r#"{"width":500,"height":36}"#), None);
+        assert_eq!(parse_capsule_size(r#"{"width":0,"height":26}"#), None);
+        assert_eq!(parse_capsule_size(r#"{"width":500,"height":26}"#), None);
+        assert_eq!(parse_capsule_size(r#"{"width":116,"height":60}"#), None);
         assert_eq!(parse_capsule_size(r#"{"width":92}"#), None);
         assert_eq!(parse_capsule_size("nope"), None);
     }

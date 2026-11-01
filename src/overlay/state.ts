@@ -48,18 +48,40 @@ export function isOverlaySearch(search: string): boolean {
   return new URLSearchParams(search).get("view") === "overlay";
 }
 
-/** Capsule size in px for each look (idle and error are the small plain
- * capsule; listening and thinking grow to hold the wave). Keep in sync with
- * `DEFAULT_CAPSULE` and the window size in src-tauri/src/overlay.rs. */
+/** Capsule size in px for each look, unrotated (idle and error are the
+ * small plain capsule; listening and thinking grow to hold the wave). On the
+ * left and right anchors the capsule is turned 90 degrees, so it stands
+ * `height` wide and `width` tall. Keep in sync with `DEFAULT_CAPSULE` and
+ * the window size in src-tauri/src/overlay.rs. */
 export const CAPSULE_SIZES: Record<
   OverlayMode,
   { width: number; height: number }
 > = {
-  idle: { width: 60, height: 30 },
-  error: { width: 60, height: 30 },
-  thinking: { width: 92, height: 34 },
-  listening: { width: 92, height: 34 },
+  idle: { width: 76, height: 24 },
+  error: { width: 76, height: 24 },
+  thinking: { width: 116, height: 26 },
+  listening: { width: 116, height: 26 },
 };
+
+/** Overlay window size in px for a horizontal capsule (top and bottom);
+ * left and right use it swapped (overlay.rs `window_size_for`). */
+export const WINDOW_W = 144;
+export const WINDOW_H = 44;
+
+/** True on the left and right anchors, where the capsule stands upright. */
+export function isVertical(pos: OverlayPosition): boolean {
+  return pos === "left" || pos === "right";
+}
+
+/** Window size for the capsule orientation at `pos`. */
+export function windowSizeFor(pos: OverlayPosition): {
+  width: number;
+  height: number;
+} {
+  return isVertical(pos)
+    ? { width: WINDOW_H, height: WINDOW_W }
+    : { width: WINDOW_W, height: WINDOW_H };
+}
 
 export function capsuleSize(mode: OverlayMode): {
   width: number;
@@ -69,10 +91,13 @@ export function capsuleSize(mode: OverlayMode): {
 }
 
 /** Wave drawing box inside the capsule, in px. */
-export const WAVE_W = 66;
-export const WAVE_H = 22;
+export const WAVE_W = 88;
+export const WAVE_H = 14;
+/** Largest wave amplitude in px: the crest plus half the 1.75 px stroke
+ * stays inside the wave box, so the line never touches the capsule rim. */
+export const WAVE_AMP_MAX = 5;
 /** Short flat line shown in the small error capsule. */
-export const ERROR_LINE_W = 30;
+export const ERROR_LINE_W = 38;
 
 /**
  * Wave amplitude in px at time `t` (ms). Listening breathes slowly, or
@@ -86,10 +111,10 @@ export function waveAmplitude(
 ): number {
   switch (mode) {
     case "listening":
-      if (level !== null) return 7 * (0.25 + 0.75 * clamp01(level));
-      return 7 * (0.6 + 0.4 * Math.sin(t / 420));
+      if (level !== null) return WAVE_AMP_MAX * (0.25 + 0.75 * clamp01(level));
+      return WAVE_AMP_MAX * (0.6 + 0.4 * Math.sin(t / 420));
     case "thinking":
-      return 1.2 + 0.4 * Math.sin(t / 300);
+      return 0.9 + 0.3 * Math.sin(t / 300);
     default:
       return 0;
   }

@@ -2,17 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   CAPSULE_SIZES,
   IDLE,
+  WAVE_AMP_MAX,
   WAVE_H,
   WAVE_W,
+  WINDOW_H,
+  WINDOW_W,
   capsuleSize,
   draggingFromPayload,
   isOverlaySearch,
+  isVertical,
   levelFromPayload,
   overlayStateFromText,
   positionFromText,
   previewFromSearch,
   sinePath,
   waveAmplitude,
+  windowSizeFor,
 } from "../state";
 
 describe("overlayStateFromText", () => {
@@ -98,32 +103,62 @@ const ys = (d: string) =>
 
 describe("capsule sizes", () => {
   it("is a small plain capsule when idle or in error", () => {
-    expect(capsuleSize("idle")).toEqual({ width: 60, height: 30 });
+    expect(capsuleSize("idle")).toEqual({ width: 76, height: 24 });
     expect(capsuleSize("error")).toEqual(capsuleSize("idle"));
   });
   it("grows to hold the wave while listening or thinking", () => {
-    expect(capsuleSize("listening")).toEqual({ width: 92, height: 34 });
+    expect(capsuleSize("listening")).toEqual({ width: 116, height: 26 });
     expect(capsuleSize("thinking")).toEqual(capsuleSize("listening"));
   });
-  it("fits every size in the 120 x 56 overlay window with the drag lift", () => {
+  it("fits every size in the 144 x 44 overlay window with the drag lift", () => {
+    expect([WINDOW_W, WINDOW_H]).toEqual([144, 44]);
     for (const { width, height } of Object.values(CAPSULE_SIZES)) {
-      expect(width * 1.04 + 16).toBeLessThanOrEqual(120);
-      expect(height * 1.04 + 16).toBeLessThanOrEqual(56);
+      expect(width * 1.04 + 16).toBeLessThanOrEqual(WINDOW_W);
+      expect(height * 1.04 + 16).toBeLessThanOrEqual(WINDOW_H);
     }
+  });
+  it("fits every size turned upright in the swapped left and right window", () => {
+    for (const pos of ["left", "right"] as const) {
+      const win = windowSizeFor(pos);
+      expect(win).toEqual({ width: 44, height: 144 });
+      for (const { width, height } of Object.values(CAPSULE_SIZES)) {
+        // Rotated 90 degrees: the capsule height runs across the window.
+        expect(height * 1.04 + 16).toBeLessThanOrEqual(win.width);
+        expect(width * 1.04 + 16).toBeLessThanOrEqual(win.height);
+      }
+    }
+  });
+  it("keeps the wave box inside the listening capsule with room to spare", () => {
+    const { width, height } = capsuleSize("listening");
+    expect(WAVE_W).toBeLessThan(width - 16);
+    expect(WAVE_H).toBeLessThan(height - 8);
+    // Crest plus half the stroke stays in the wave box.
+    expect(WAVE_AMP_MAX + 1).toBeLessThanOrEqual(WAVE_H / 2);
+  });
+});
+
+describe("orientation", () => {
+  it("stands upright only on the left and right anchors", () => {
+    expect(isVertical("left")).toBe(true);
+    expect(isVertical("right")).toBe(true);
+    expect(isVertical("top")).toBe(false);
+    expect(isVertical("bottom")).toBe(false);
+    expect(windowSizeFor("top")).toEqual({ width: 144, height: 44 });
+    expect(windowSizeFor("bottom")).toEqual(windowSizeFor("top"));
   });
 });
 
 describe("sine wave", () => {
   it("spans the wave box and keeps both ends on the midline", () => {
-    const d = sinePath(1234, 7);
+    const d = sinePath(1234, WAVE_AMP_MAX);
     expect(d.startsWith("M0 ")).toBe(true);
     expect(d).toContain(`L${WAVE_W} `);
     const y = ys(d);
     expect(y[0]).toBeCloseTo(WAVE_H / 2, 5);
     expect(y[y.length - 1]).toBeCloseTo(WAVE_H / 2, 5);
     for (const v of y) {
-      expect(v).toBeGreaterThanOrEqual(WAVE_H / 2 - 7);
-      expect(v).toBeLessThanOrEqual(WAVE_H / 2 + 7);
+      expect(v).toBeGreaterThanOrEqual(WAVE_H / 2 - WAVE_AMP_MAX);
+      expect(v).toBeLessThanOrEqual(WAVE_H / 2 + WAVE_AMP_MAX);
     }
   });
   it("moves over time", () => {
@@ -136,12 +171,12 @@ describe("sine wave", () => {
     const amps = [0, 300, 600, 900, 1300, 1800].map((t) =>
       waveAmplitude("listening", t),
     );
-    expect(Math.min(...amps)).toBeGreaterThanOrEqual(7 * 0.2);
-    expect(Math.max(...amps)).toBeLessThanOrEqual(7);
+    expect(Math.min(...amps)).toBeGreaterThanOrEqual(WAVE_AMP_MAX * 0.2);
+    expect(Math.max(...amps)).toBeLessThanOrEqual(WAVE_AMP_MAX);
     expect(Math.max(...amps) - Math.min(...amps)).toBeGreaterThan(1);
-    expect(waveAmplitude("listening", 0, 1)).toBe(7);
-    expect(waveAmplitude("listening", 0, 0)).toBeCloseTo(1.75);
-    expect(waveAmplitude("listening", 0, 5)).toBe(7);
+    expect(waveAmplitude("listening", 0, 1)).toBe(WAVE_AMP_MAX);
+    expect(waveAmplitude("listening", 0, 0)).toBeCloseTo(WAVE_AMP_MAX * 0.25);
+    expect(waveAmplitude("listening", 0, 5)).toBe(WAVE_AMP_MAX);
   });
   it("shimmers low while thinking and is flat when idle or in error", () => {
     for (const t of [0, 400, 900]) {

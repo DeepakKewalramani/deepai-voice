@@ -11,6 +11,7 @@ import {
   WAVE_W,
   capsuleSize,
   draggingFromPayload,
+  isVertical,
   levelFromPayload,
   overlayStateFromText,
   positionFromText,
@@ -32,7 +33,7 @@ export const OVERLAY_CAPSULE_EVENT = "overlay-capsule";
 export const OVERLAY_PREVIEW_EVENT = "overlay-preview";
 
 /** Static gentle wave for reduced motion and the first paint. */
-const STILL_AMPLITUDE = 4.5;
+const STILL_AMPLITUDE = 3.5;
 /** Thinking travels slower than listening. */
 const THINKING_SPEED = 0.35;
 
@@ -64,7 +65,9 @@ interface Props {
 }
 
 /** DeepAI sine capsule: a plain graphite capsule that shows one moving
- * sine line while listening, shown in the transparent `overlay` window. */
+ * sine line while listening, shown in the transparent `overlay` window. On
+ * the left and right anchors CSS turns the whole capsule (wave included)
+ * 90 degrees; the wave is always drawn along the capsule's own x axis. */
 export default function Overlay({
   initialState = IDLE,
   initialPosition = "top",
@@ -188,6 +191,7 @@ export default function Overlay({
     <div
       className="ov"
       data-pos={position}
+      data-orient={isVertical(position) ? "vertical" : "horizontal"}
       data-mode={mode}
       data-dragging={dragging ? "true" : undefined}
     >

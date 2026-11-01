@@ -9,8 +9,9 @@
 //!
 //! The tap callback only runs `DragState` (pure, tested below) under a tiny
 //! mutex and posts window moves to a worker thread over a bounded channel.
-//! On release the worker snaps the pill to the nearest screen edge and saves
-//! the placement (see `overlay::snap_placement`).
+//! On release the worker snaps the pill to the nearest of the four anchors
+//! with a short eased move (see `overlay::nearest_anchor`, `snap_steps`),
+//! turning it upright on the left and right, and saves the anchor.
 //!
 //! An active tap needs the Accessibility permission. Without it the tap is
 //! not installed and the check repeats every 3 s. Nothing here logs mouse
@@ -25,9 +26,9 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Listener, LogicalPosition, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager, Runtime};
 
-use crate::overlay::{self, OVERLAY_HEIGHT, OVERLAY_WIDTH, OVERLAY_WINDOW, Position, Rect, Screen};
+use crate::overlay::{self, OVERLAY_WINDOW, Placement, Position, Rect, Screen};
 
 /// Movement in points before a press on the capsule becomes a drag. A plain
 /// click (less movement) is swallowed and does nothing.
@@ -39,6 +40,29 @@ pub const CAPSULE_EVENT: &str = "overlay-capsule";
 /// Pending window moves the worker may lag behind by; extra moves are
 /// dropped (a newer one follows), so the tap never blocks.
 const QUEUE: usize = 256;
+/// Window moves in the snap animation after a drop.
+pub const SNAP_STEPS: usize = 8;
+/// Length of the snap animation in ms.
+pub const SNAP_MS: u64 = 150;
+/// Extra wait after the snap when the capsule turns, so the CSS turn
+/// (overlay.css `rotate 200ms`) ends before the window shrinks around it.
+pub const TURN_SETTLE_MS: u64 = 80;
+
+/// Window origins for an eased (ease-out cubic) move from `from` to `to`
+/// in `steps` steps (at least one). The last step is exactly `to`.
+pub fn snap_steps(from: (f64, f64), to: (f64, f64), steps: usize) -> Vec<(f64, f64)> {
+    let n = steps.max(1);
+    (1..=n)
+        .map(|i| {
+            if i == n {
+                return to;
+            }
+            let t = i as f64 / n as f64;
+            let e = 1.0 - (1.0 - t).powi(3);
+            (from.0 + (to.0 - from.0) * e, from.1 + (to.1 - from.1) * e)
+        })
+        .collect()
+}
 
 /// Left mouse event kinds the tap watches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,8 +302,45 @@ fn clamped(
     let (edge, size) = shared_edge_and_capsule();
     let (cx, cy) = overlay::capsule_rect(origin, edge, size).center();
     let screen = overlay::screen_at(screens, cx, cy).or(primary)?;
-    let o = overlay::clamp_to_screen(screen, OVERLAY_WIDTH, OVERLAY_HEIGHT, origin);
+    let (w, h) = overlay::window_size_for(edge);
+    let o = overlay::clamp_to_screen(screen, w, h, origin);
     Some((o, screen))
+}
+
+/// Eases the pill from where it was dropped to `anchor` on `screen`. Runs
+/// in the worker thread, never in the tap callback. While it moves, the
+/// window is the square turn window so the capsule can turn between
+/// horizontal and upright without clipping; `apply_placement` then gives
+/// the window the anchor's own size, with the capsule staying in place.
+fn animate_to_anchor<R: Runtime>(
+    app: &AppHandle<R>,
+    from: (f64, f64),
+    from_edge: Position,
+    anchor: Position,
+    screen: Screen,
+) {
+    let Some(window) = app.get_webview_window(OVERLAY_WINDOW) else {
+        return;
+    };
+    let (_, size) = shared_edge_and_capsule();
+    let start_center = overlay::capsule_rect(from, from_edge, size).center();
+    let target = overlay::anchor_window_rect(anchor, screen, overlay::window_size_for(anchor));
+    let end_center = overlay::capsule_rect((target.x, target.y), anchor, size).center();
+    let start = overlay::turn_origin(start_center, anchor, size);
+    let end = overlay::turn_origin(end_center, anchor, size);
+    let (tw, th) = overlay::TURN_WINDOW;
+    let _ = window.set_size(LogicalSize::new(tw, th));
+    let _ = window.set_position(LogicalPosition::new(start.0, start.1));
+    // The frontend lays the capsule out for the new anchor (and turns it).
+    let _ = app.emit_to(OVERLAY_WINDOW, overlay::POSITION_EVENT, anchor.as_str());
+    let pause = std::time::Duration::from_millis(SNAP_MS / SNAP_STEPS as u64);
+    for (x, y) in snap_steps(start, end, SNAP_STEPS) {
+        std::thread::sleep(pause);
+        let _ = window.set_position(LogicalPosition::new(x, y));
+    }
+    if from_edge.is_vertical() != anchor.is_vertical() {
+        std::thread::sleep(std::time::Duration::from_millis(TURN_SETTLE_MS));
+    }
 }
 
 fn run_worker<R: Runtime>(app: AppHandle<R>, rx: Receiver<Msg>) {
@@ -316,12 +377,14 @@ fn run_worker<R: Runtime>(app: AppHandle<R>, rx: Receiver<Msg>) {
                 }
             }
             Msg::Drop(x, y) => {
+                // The monitor is the one under the capsule centre, which the
+                // grab point (and so the cursor) lies inside.
                 if let Some((o, screen)) = clamped((x, y), &screens, primary) {
                     let (edge, size) = shared_edge_and_capsule();
                     let center = overlay::capsule_rect(o, edge, size).center();
-                    let placement =
-                        overlay::snap_placement(screen, OVERLAY_WIDTH, OVERLAY_HEIGHT, center);
-                    overlay::apply_placement(&app, placement, Some(screen));
+                    let anchor = overlay::nearest_anchor(center, screen);
+                    animate_to_anchor(&app, o, edge, anchor, screen);
+                    overlay::apply_placement(&app, Placement::preset(anchor), Some(screen));
                 }
                 dragging = false;
                 emit_dragging(&app, false);
@@ -756,6 +819,34 @@ mod tests {
         assert_eq!(tap_action(5), TapAction::Ignore);
         assert_eq!(tap_action(10), TapAction::Ignore);
         assert_eq!(event_mask(), (1 << 1) | (1 << 2) | (1 << 6));
+    }
+
+    #[test]
+    fn snap_steps_ease_out_and_end_on_the_anchor() {
+        let steps = snap_steps((0.0, 100.0), (80.0, 20.0), SNAP_STEPS);
+        assert_eq!(steps.len(), SNAP_STEPS);
+        assert_eq!(*steps.last().unwrap(), (80.0, 20.0));
+        // Monotonic toward the target, fast first then slow (ease out).
+        let xs: Vec<f64> = steps.iter().map(|p| p.0).collect();
+        assert!(xs.windows(2).all(|w| w[1] >= w[0]), "{xs:?}");
+        assert!(xs[0] > 80.0 / SNAP_STEPS as f64, "{xs:?}");
+        let first = xs[0];
+        let last_gap = xs[SNAP_STEPS - 1] - xs[SNAP_STEPS - 2];
+        assert!(first > last_gap, "{xs:?}");
+        // y moves the other way just as smoothly.
+        assert!(steps.windows(2).all(|w| w[1].1 <= w[0].1));
+    }
+
+    #[test]
+    fn snap_steps_handle_zero_steps_and_no_distance() {
+        assert_eq!(snap_steps((1.0, 2.0), (5.0, 6.0), 0), vec![(5.0, 6.0)]);
+        let still = snap_steps((5.0, 6.0), (5.0, 6.0), 4);
+        assert!(still.iter().all(|p| *p == (5.0, 6.0)));
+        // About 150 ms in total, a few steps.
+        const {
+            assert!(SNAP_MS >= 100 && SNAP_MS <= 200);
+            assert!(SNAP_STEPS >= 4 && SNAP_STEPS <= 12);
+        }
     }
 
     #[test]

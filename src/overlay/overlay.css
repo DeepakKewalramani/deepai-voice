@@ -1,8 +1,11 @@
-/* DeepAI sine capsule. The window is a transparent, click-through 120x56 box
-   (see src-tauri/src/overlay.rs); only the capsule is painted. Idle is a
-   plain empty capsule; listening shows one gradient sine line (drawn by
-   Overlay.tsx); thinking is a flat shimmering line; error a short red line.
-   Sizes come from state.ts `capsuleSize` as --w and --h. */
+/* DeepAI sine capsule. The window is a transparent, click-through box,
+   144x44 on the top and bottom anchors and 44x144 on the left and right ones
+   (see src-tauri/src/overlay.rs `window_size_for`); only the capsule is
+   painted. Idle is a plain empty capsule; listening shows one gradient sine
+   line (drawn by Overlay.tsx); thinking is a flat shimmering line; error a
+   short red line. Sizes come from state.ts `capsuleSize` as --w and --h. On
+   the left and right anchors the capsule is turned 90 degrees so it stands
+   upright; the wave turns with it. */
 
 html.overlay-view,
 html.overlay-view body,
@@ -24,21 +27,37 @@ html.overlay-view #root {
 
   position: fixed;
   inset: 0;
+  box-sizing: border-box;
+  padding: var(--ov-inset);
+  /* Flex keeps the capsule in place while its size animates, and lets a
+     new anchor take effect at once (matches overlay.rs capsule_rect). */
+  display: flex;
+  justify-content: center;
+  align-items: center;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
+}
+/* Top grows down from below the notch, bottom grows up; left and right are
+   centred in their upright window. */
+.ov[data-pos="top"] {
+  align-items: flex-start;
+}
+.ov[data-pos="bottom"] {
+  align-items: flex-end;
 }
 
 /* ---- Capsule ------------------------------------------------------------- */
 
 .ov-pill {
-  position: absolute;
+  position: relative;
+  flex: none;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--w, 60px);
-  height: var(--h, 30px);
+  width: var(--w, 76px);
+  height: var(--h, 24px);
   border-radius: 999px;
   background: var(--ov-body);
   border: 1px solid var(--ov-rim);
@@ -50,8 +69,7 @@ html.overlay-view #root {
   transition:
     width 460ms var(--ov-spring),
     height 360ms var(--ov-spring),
-    margin 460ms var(--ov-spring),
-    top 360ms var(--ov-spring),
+    rotate 200ms ease-out,
     scale 180ms ease,
     box-shadow 180ms ease,
     border-color 240ms ease;
@@ -68,27 +86,15 @@ html.overlay-view #root {
   }
 }
 
-/* Placement inside the window, per edge (matches overlay.rs capsule_rect). */
-.ov[data-pos="top"] .ov-pill,
-.ov[data-pos="bottom"] .ov-pill {
-  left: 50%;
-  margin-left: calc(var(--w, 60px) / -2);
-}
-.ov[data-pos="top"] .ov-pill {
-  top: var(--ov-inset);
-}
-.ov[data-pos="bottom"] .ov-pill {
-  bottom: var(--ov-inset);
-}
-.ov[data-pos="left"] .ov-pill,
-.ov[data-pos="right"] .ov-pill {
-  top: calc(50% - var(--h, 30px) / 2);
-}
-.ov[data-pos="left"] .ov-pill {
-  left: var(--ov-inset);
-}
-.ov[data-pos="right"] .ov-pill {
-  right: var(--ov-inset);
+/* Upright on the left and right anchors. `rotate` is its own property, so
+   it does not fight the enter animation's transform. Turned 90 degrees,
+   the capsule's +x points down the screen, so the shadow offset moves to x
+   to keep it falling downward. */
+.ov[data-orient="vertical"] .ov-pill {
+  rotate: 90deg;
+  box-shadow:
+    6px 0 16px -6px rgba(0, 0, 0, 0.55),
+    1px 0 3px rgba(0, 0, 0, 0.3);
 }
 
 /* Lifted while dragged. `scale` is its own property, so it does not fight
@@ -99,6 +105,11 @@ html.overlay-view #root {
   box-shadow:
     0 10px 22px -6px rgba(0, 0, 0, 0.7),
     0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.ov[data-orient="vertical"][data-dragging] .ov-pill {
+  box-shadow:
+    10px 0 22px -6px rgba(0, 0, 0, 0.7),
+    2px 0 6px rgba(0, 0, 0, 0.4);
 }
 
 /* ---- Line ---------------------------------------------------------------- */
@@ -111,7 +122,7 @@ html.overlay-view #root {
 .ov-line {
   fill: none;
   stroke: url(#ov-sine-grad);
-  stroke-width: 2;
+  stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
