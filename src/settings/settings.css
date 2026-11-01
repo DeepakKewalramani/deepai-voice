@@ -293,3 +293,151 @@ select.settings-input {
     transition: none !important;
   }
 }
+
+/* Permissions tab. Rows reuse the settings card; the pill matches the Home
+   status pill. Amber has no app token yet, so it is scoped here. */
+.perm-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.settings-card.perm-card {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.perm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-4);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: inherit;
+  cursor: pointer;
+  transition: background-color 140ms var(--ease);
+}
+.perm-row:hover {
+  background: var(--c-sunken);
+}
+.settings-root .perm-row:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--c-ring);
+}
+.perm-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.perm-title {
+  font-size: 13px;
+}
+.perm-pill {
+  --tone: var(--c-text-muted);
+  --tone-soft: var(--c-sunken);
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tone);
+  background: var(--tone-soft);
+}
+.perm-pill[data-tone="granted"] {
+  --tone: var(--c-ok);
+  --tone-soft: var(--c-ok-soft);
+}
+.perm-pill[data-tone="needed"] {
+  --tone: #a8620b;
+  --tone-soft: #fbefd9;
+}
+.perm-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.perm-chevron {
+  flex: none;
+  color: var(--c-text-muted);
+}
+.perm-actions {
+  display: flex;
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+.settings-btn.perm-request {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .perm-pill[data-tone="needed"] {
+    --tone: #f0b35a;
+    --tone-soft: #3a2d17;
+  }
+}
+
+@media (max-width: 560px) {
+  .perm-row {
+    flex-wrap: wrap;
+  }
+  .perm-text {
+    flex-basis: 100%;
+  }
+  .perm-chevron {
+    margin-left: auto;
+  }
+}
+
+/* Launch at login switch, in the accent color like the primary button. */
+.switch-row {
+  align-items: center;
+}
+.settings-switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-border-strong);
+  cursor: pointer;
+  transition: background-color 140ms var(--ease);
+}
+.settings-switch[aria-checked="true"] {
+  background: var(--c-accent);
+}
+.settings-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow:
+    var(--shadow-sm),
+    0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 140ms var(--ease);
+}
+.settings-switch[aria-checked="true"] .settings-switch-knob {
+  transform: translateX(16px);
+}
+.settings-switch:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.settings-error {
+  color: var(--c-error);
+}

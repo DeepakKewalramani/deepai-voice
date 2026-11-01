@@ -47,7 +47,13 @@ export interface Settings {
 }
 
 export type SettingsTab =
-  "general" | "providers" | "shortcuts" | "styles" | "privacy" | "about";
+  | "general"
+  | "permissions"
+  | "providers"
+  | "shortcuts"
+  | "styles"
+  | "privacy"
+  | "about";
 
 export const defaultSettings: Settings = {
   schemaVersion: 1,

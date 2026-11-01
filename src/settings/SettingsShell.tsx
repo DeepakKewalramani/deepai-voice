@@ -10,6 +10,8 @@ import {
   ShortcutsPanel,
   StylesPanel,
 } from "./Panels";
+import { PermissionsPanel } from "./PermissionsPanel";
+import { LaunchAtLogin } from "./LaunchAtLogin";
 
 export interface SettingsShellProps {
   initialSettings?: Settings;
@@ -29,6 +31,7 @@ export interface SettingsShellProps {
 
 const allTabs: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
+  { id: "permissions", label: "Permissions" },
   { id: "providers", label: "Providers" },
   { id: "shortcuts", label: "Shortcuts" },
   { id: "styles", label: "Styles" },
@@ -146,7 +149,9 @@ export const SettingsShell: React.FC<SettingsShellProps> = ({
             {tabs.find((t) => t.id === active)?.label}
           </h3>
         )}
+        {active === "general" && <LaunchAtLogin />}
         {active === "general" && <GeneralPanel {...common} />}
+        {active === "permissions" && <PermissionsPanel />}
         {active === "providers" && (
           <ProvidersPanel
             {...common}
