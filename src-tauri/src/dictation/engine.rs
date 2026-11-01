@@ -4,8 +4,33 @@
 
 use crate::stt::apple_speech::{LocaleSupport, SpeechPermissionStatus};
 
-/// Locale used for on-device streaming recognition.
-pub const STREAM_LOCALE: &str = "en-US";
+/// Preferred locale for on-device streaming recognition: Indian English.
+pub const LOCALE_PREFERRED: &str = "en-IN";
+/// Used when the preferred locale cannot run on this Mac.
+pub const LOCALE_FALLBACK: &str = "en-US";
+/// Env var that picks the locale (`DEEPAI_LOCALE=en-GB`) until a persisted
+/// setting exists. Only the locales in `LOCALES` are accepted.
+pub const LOCALE_ENV: &str = "DEEPAI_LOCALE";
+/// Locales the app may request.
+pub const LOCALES: [&str; 3] = ["en-IN", "en-US", "en-GB"];
+
+/// Picks the locale for a hold: the env choice if it is allowed and runs on
+/// device, else Indian English, else US English. Pure: `support` says what
+/// the OS can do.
+pub fn pick_locale(env: Option<&str>, support: impl Fn(&str) -> LocaleSupport) -> &'static str {
+    let wanted = env
+        .map(str::trim)
+        .and_then(|v| LOCALES.iter().find(|l| l.eq_ignore_ascii_case(v)).copied());
+    for candidate in wanted
+        .into_iter()
+        .chain([LOCALE_PREFERRED, LOCALE_FALLBACK])
+    {
+        if support(candidate) == LocaleSupport::OnDevice {
+            return candidate;
+        }
+    }
+    LOCALE_FALLBACK
+}
 /// Env var that forces Whisper (`DEEPAI_ENGINE=whisper`) until a persisted
 /// setting exists.
 pub const ENGINE_ENV: &str = "DEEPAI_ENGINE";
@@ -95,4 +120,50 @@ pub fn should_request_permission(
         && permission == SpeechPermissionStatus::Undetermined
         && bundled
         && !already_asked
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::*;
+
+    fn only(on: &'static [&'static str]) -> impl Fn(&str) -> LocaleSupport {
+        move |l| {
+            if on.contains(&l) {
+                LocaleSupport::OnDevice
+            } else {
+                LocaleSupport::NotSupported
+            }
+        }
+    }
+
+    #[test]
+    fn indian_english_is_preferred_when_it_runs_on_device() {
+        assert_eq!(pick_locale(None, only(&["en-IN", "en-US"])), "en-IN");
+    }
+
+    #[test]
+    fn falls_back_to_us_english_when_indian_english_is_not_on_device() {
+        assert_eq!(pick_locale(None, only(&["en-US"])), "en-US");
+    }
+
+    #[test]
+    fn env_choice_wins_when_allowed_and_on_device() {
+        assert_eq!(
+            pick_locale(Some("en-gb"), only(&["en-GB", "en-IN"])),
+            "en-GB"
+        );
+        // Not on device: back to the normal order.
+        assert_eq!(pick_locale(Some("en-GB"), only(&["en-IN"])), "en-IN");
+    }
+
+    #[test]
+    fn unknown_env_values_are_ignored() {
+        assert_eq!(pick_locale(Some("fr-FR"), only(&["en-IN"])), "en-IN");
+        assert_eq!(pick_locale(Some("../etc"), only(&["en-US"])), "en-US");
+    }
+
+    #[test]
+    fn nothing_on_device_returns_the_fallback_so_whisper_takes_over() {
+        assert_eq!(pick_locale(None, only(&[])), LOCALE_FALLBACK);
+    }
 }

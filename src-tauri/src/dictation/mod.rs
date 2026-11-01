@@ -3,8 +3,8 @@
 //! window title and a live preview event for the UI.
 //!
 //! Engine per hold (`engine::choose_engine`): the on-device streaming engine
-//! when speech permission is granted and en-US runs on device, otherwise
-//! Whisper with a fixed reason in the log. Streaming flow: the recorder
+//! when speech permission is granted and Indian English (en-US as the
+//! fallback) runs on device, otherwise Whisper with a fixed reason in the log. Streaming flow: the recorder
 //! drains audio every 50 ms into the engine session (`stream_hold`); every
 //! word of a partial except its last one is typed at once, and each session
 //! final is reconciled with what was typed.
@@ -439,8 +439,9 @@ impl EnginePicker {
             self.asked = true;
             SfSpeechPermission.request(Box::new(|_| {}));
         }
+        let locale = stream_locale();
         engine::choose_engine(self.setting, permission, || {
-            SystemOnDeviceProbe.support(engine::STREAM_LOCALE)
+            SystemOnDeviceProbe.support(locale)
         })
     }
 
@@ -458,7 +459,7 @@ impl EnginePicker {
     fn start_stream(&mut self) -> Option<StreamHold> {
         let reason = match (self.choose(), self.engine.clone()) {
             (EngineChoice::Streaming, Some(engine)) => {
-                match StreamHold::start(engine, engine::STREAM_LOCALE) {
+                match StreamHold::start(engine, stream_locale()) {
                     Ok(stream) => {
                         tracing::info!("dictation engine=streaming");
                         return Some(stream);
@@ -865,4 +866,17 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>) -> impl Fn(HotkeyAction) + Send + 's
     move |action| {
         let _ = inbox_tx.send(Input::Hotkey(action));
     }
+}
+
+/// Locale for this hold: Indian English when it runs on this Mac, else US English.
+#[cfg(target_os = "macos")]
+fn stream_locale() -> &'static str {
+    use crate::stt::apple_speech::{OnDeviceProbe, SystemOnDeviceProbe};
+    let env = std::env::var(engine::LOCALE_ENV).ok();
+    engine::pick_locale(env.as_deref(), |l| SystemOnDeviceProbe.support(l))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stream_locale() -> &'static str {
+    engine::LOCALE_FALLBACK
 }
