@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>DeepAI Voice uses the microphone to turn your speech into text.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>DeepAI Voice turns your speech into text on this Mac.</string>
 </dict>
 </plist>
