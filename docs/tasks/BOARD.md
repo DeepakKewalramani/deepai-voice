@@ -26,5 +26,6 @@ A slice is offered only when every Depends slice is DONE and its Owns paths do n
 | 2.5 | Secure field block | IN REVIEW, committed 3d251ae (secure-field gate in focus.rs/typing.rs) | claude main | phase-0-foundation | 2026-11-01 12:30 | claude | 2.4 | src-tauri/src/paste/secure.rs, src-tauri/tests/secure_field_test.rs, docs/tasks/2.5.md |
 | 2.8 | Settings UI: providers, keys, languages, prompts, shortcuts; usage estimate; privacy notices | IN PROGRESS (shell + permissions + launch-at-login a5a2f37; provider keys section still missing) | claude main | phase-0-foundation | 2026-11-01 12:30 | antigravity | 0.4 | src/settings/ |
 | 2.11 | Streaming STT engine (on-device macOS Speech) | IN REVIEW, committed 5811558 (streaming_test 14 pass, 1 ignored; real recognition not verified) | claude main | phase-0-foundation | 2026-11-01 12:30 | claude | 2.1 | src-tauri/src/stt/streaming.rs, apple_speech.rs, src-tauri/tests/streaming_test.rs |
+| 2.12 | Wire streaming engine (2.11) into dictation for instant typing, Whisper fallback | IN PROGRESS | claude main | phase-0-foundation | 2026-11-01 12:45 | claude | 2.1, 2.4, 2.11 | src-tauri/src/dictation/, src-tauri/src/stt/streaming.rs, src-tauri/src/stt/apple_speech.rs, src-tauri/tests/dictation_test.rs |
 
 The Planner adds the next phase's slices when the current phase is half done. Full list: docs/ROADMAP.md.
