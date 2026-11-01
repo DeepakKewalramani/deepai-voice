@@ -17,6 +17,7 @@ DeepAI Voice: our own product. Dictation, live translator (any language, suggest
 Tauri v2 + Rust for native parts only (audio, Whisper, hotkey, paste, secure field, system audio). React + TypeScript + Vite for UI and app logic. Providers behind traits: `stt`, `llm`, `tts`.
 
 ## 4. Hard rules
+- **Announce before you start, in one shared place.** Before ANY research, investigation, spike, install or implementation (not only slices), post one line in `docs/tasks/INBOX.md`, the single common log for every AI, account and tool. Read the top of `INBOX.md`, `docs/tasks/BOARD.md` and `docs/research/INDEX.md` first: if the topic is already claimed or answered, reuse it and do not repeat it. Details: section 7.
 - Work on ONE slice at a time, only after claiming it on `docs/tasks/BOARD.md`. Never edit files another agent's claimed slice owns.
 - Small slices: target under ~300 changed lines, working and testable on its own.
 - Test first where possible. Run tests, lint, typecheck, build. Paste real output in the slice file. Never claim "works" without it.
@@ -52,3 +53,20 @@ Not a check: `npm install` (setup), `npm run tauri dev` (dev run with hot reload
   Examples: `Phase 0: App scaffold, project checks and coordination tools`, `1.2: Local Whisper speech-to-text`.
 - Description: use `.github/pull_request_template.md` exactly (Summary, Slices, Changes, How it was tested with real results, Review, Not verified). Write it once from verified facts; update only when new slices land. No claims without a command result. No "Generated with" line.
 - Commits: `Slice <id>: <what it does>` or a short imperative sentence; body explains why when not obvious.
+
+## 7. Announce before you start (the one shared log)
+`docs/tasks/INBOX.md` is the one common place every AI, account and tool uses. `BOARD.md` stays the lock for slices. `docs/research/INDEX.md` is the register of research results.
+
+**Before you start** (research, investigation, spike, install, decision, or implementation), do these in order:
+1. Read the top 30 lines of `docs/tasks/INBOX.md`, `docs/tasks/BOARD.md` and `docs/research/INDEX.md`.
+2. If the same topic or the same files are already claimed, stop and pick something else, or post a question. If it is already answered in `docs/research/`, reuse the answer and say so.
+3. Post one line in `INBOX.md` (command: `node scripts/agents.mjs say <your-agent-name> all "<line>"`):
+   - `RESEARCH: <topic>. Question: <what we need to know>. Output: <path where the note will be saved>.`
+   - `BUILD: <slice or task id>. Owns: <paths>.` (slices are also claimed on `BOARD.md`)
+   - `INSTALL: <package or model, version, size, licence, why>.` (also logged in `docs/INSTALLED.md`, needs the human's OK)
+   - `DECISION: <what was decided, by whom>.`
+4. Only then start.
+
+**When you finish or stop,** post `DONE:` or `STOPPED:` with the result in one sentence, the path of the note, and what is verified (FACT) and what is not. A research note goes in `docs/research/` (or `docs/specs/` for a plan) and gets one row in `docs/research/INDEX.md`.
+
+**Never** use chat history, private memory or a personal notes folder as the record: if it is not in `INBOX.md` and `docs/research/`, other agents cannot see it. Do not write keys, personal accounts, quotas or transcripts in these files.

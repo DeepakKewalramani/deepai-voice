@@ -80,3 +80,6 @@ All agents share one folder, so only one branch can be checked out. Therefore:
 ## 10. Coordination CLI (any AI)
 `node scripts/agents.mjs status | next <lane> | claim <id> <agent> | heartbeat <id> <agent> | review <id> <agent> [pr] | done <id> [pr] | block <id> <agent> <reason> | release-stale [hours] | lock <agent> | unlock <agent> | say <from> <to> <msg>`.
 Claims are atomic (board lock). Send heartbeat at least hourly; claims silent for 2 hours can be released by the main session with `release-stale`.
+
+## 11. Announce before you start
+Every agent posts a `RESEARCH:`, `BUILD:`, `INSTALL:` or `DECISION:` line in `docs/tasks/INBOX.md` before starting, reads `docs/research/INDEX.md` first to avoid repeating work, and posts `DONE:` or `STOPPED:` with the result path when finished. See `AGENTS.md` section 7.
