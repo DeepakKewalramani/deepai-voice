@@ -57,10 +57,10 @@ export const CAPSULE_SIZES: Record<
   OverlayMode,
   { width: number; height: number }
 > = {
-  idle: { width: 36, height: 8 },
-  error: { width: 48, height: 14 },
-  thinking: { width: 72, height: 20 },
-  listening: { width: 72, height: 20 },
+  idle: { width: 50, height: 10 },
+  error: { width: 60, height: 16 },
+  thinking: { width: 88, height: 22 },
+  listening: { width: 88, height: 22 },
 };
 
 /** The control capsule shown while the cursor is over the pill, unrotated

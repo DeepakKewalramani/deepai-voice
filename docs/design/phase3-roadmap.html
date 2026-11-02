@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="claude:viewport-fit-sides" content="cover">
+  <title>Phase 3: Live Translator</title>
+  <style>
+    /* Design: structured technical docs with a clear hierarchy. Two-column layout for slice details. Emphasis on flow and dependencies. */
+    :root {
+      /* Colors: working docs palette — quiet slate/steel theme with accent in emerald for "done" and alerts */
+      --bg: #f8f9fa;
+      --fg: #1a1f2e;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --accent: #059669;
+      --warning: #d97706;
+      --info: #0891b2;
+      --serif: "Merriweather", Georgia, serif;
+      --mono: "Fira Code", "Courier New", monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f1117;
+        --fg: #e6edf3;
+        --muted: #8b949e;
+        --border: #30363d;
+        --accent: #3fb950;
+        --warning: #d29922;
+        --info: #58a6ff;
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1117;
+      --fg: #e6edf3;
+      --muted: #8b949e;
+      --border: #30363d;
+      --accent: #3fb950;
+      --warning: #d29922;
+      --info: #58a6ff;
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box }
+    html, body { height: 100% }
+    body {
+      margin: 0;
+      padding-left: max(16px, env(safe-area-inset-left, 0px));
+      padding-right: max(16px, env(safe-area-inset-right, 0px));
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      background: var(--bg);
+      color: var(--fg);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      margin: 0 0 8px 0;
+      color: var(--fg);
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin: 24px 0 12px 0;
+      color: var(--fg);
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 16px 0 8px 0;
+      color: var(--fg);
+    }
+
+    .header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 15px;
+      margin: 4px 0 0 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    th {
+      background: var(--border);
+      padding: 8px 12px;
+      text-align: left;
+      font-weight: 600;
+      border: 1px solid var(--border);
+    }
+    td {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+    }
+    tr:nth-child(even) { background: color-mix(in srgb, var(--bg) 95%, var(--border)) }
+
+    .status-done { color: var(--accent); font-weight: 600 }
+    .status-todo { color: var(--muted) }
+    .status-inprogress { color: var(--info); font-weight: 600 }
+    .status-blocked { color: var(--warning); font-weight: 600 }
+
+    .slice-card {
+      border-left: 4px solid var(--border);
+      padding: 16px;
+      margin: 12px 0;
+      background: color-mix(in srgb, var(--bg) 98%, var(--border));
+    }
+    .slice-card.blocking { border-left-color: var(--warning) }
+    .slice-card.foundation { border-left-color: var(--accent) }
+
+    code {
+      background: color-mix(in srgb, var(--bg) 85%, var(--border));
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .depends {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .depends strong { color: var(--fg) }
+
+    .section { margin-top: 28px }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Phase 3: Live Translator</h1>
+    <p class="subtitle">System audio capture, streaming STT per channel, real-time translation, and subtitles. Demo target: 3-minute bilingual call end-to-end.</p>
+  </div>
+
+  <div class="section">
+    <h2>Overview</h2>
+    <p><strong>Goal:</strong> Extend dictation to live calls. Capture audio from Zoom, Meet, Teams and similar apps ("system audio"), run streaming speech-to-text on two channels (user + others), translate each segment to chosen languages, and display live subtitles with suggested replies.</p>
+    <p><strong>Branch:</strong> <code>phase-3-translator</code></p>
+    <p><strong>Demo check:</strong> Full 3-minute test call with recording, bilingual subtitles, and suggested reply.</p>
+  </div>
+
+  <div class="section">
+    <h2>Slices (target ~300 LOC each)</h2>
+
+    <div class="slice-card foundation">
+      <h3>3.1 System audio capture</h3>
+      <p><strong>Owns:</strong> <code>src-tauri/src/audio/system.rs</code>, system tap interface, tests</p>
+      <p><strong>Goal:</strong> Capture audio from the system ("Others" channel) via ScreenCaptureKit (macOS 14+) or fallback to CoreAudio tapClient. Separate from mic: two parallel channels on the overlay.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>System audio muted locally (rule 8: user's own speaker is not intercepted)</li>
+        <li>Unit tests: fake tap returns audio, stop disables, permission checks work</li>
+        <li>Real manual check: Zoom/YouTube audio captured and level meters move</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> Phase 1 (audio module, level meter)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.2 Streaming STT with auto language detection</h3>
+      <p><strong>Owns:</strong> <code>src-tauri/src/stt/streaming_session.rs</code>, language detection, tests</p>
+      <p><strong>Goal:</strong> Wire the streaming engine (2.11) into live audio from both channels. Auto-detect language and route to the right STT provider. Emit partial and final events per channel.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>English-only: on-device Speech framework for both channels</li>
+        <li>Hinglish/Hindi: Sarvam or Deepgram with auto-detect, fallback to English on error</li>
+        <li>Real manual check: Zoom + Hindi-mix audio → English + Hinglish subtitles live</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.1 (system audio), 2.11 (streaming engine), 2.7 (cloud STT adapters)</div>
+    </div>
+
+    <div class="slice-card blocking">
+      <h3>3.3 Recording consent and banner</h3>
+      <p><strong>Owns:</strong> <code>src/call/RecordingBanner.tsx</code>, consent modal, overlay changes</p>
+      <p><strong>Goal:</strong> Before capturing system audio, show a consent screen and a persistent banner ("Recording started") while capturing. Store consent choice.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>First use: modal with "Start recording this call" and legal notice</li>
+        <li>While recording: small banner on the overlay or pill</li>
+        <li>Manual check: Zoom → recording banner visible throughout</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.1 (system audio)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.4 Translation engine: LLM chain for each segment</h3>
+      <p><strong>Owns:</strong> <code>src-tauri/src/translate/</code>, Anthropic/custom OpenAI, glossary support, tests</p>
+      <p><strong>Goal:</strong> As each STT segment completes, translate to chosen languages (default: English + user's language). Use Haiku for speed, optional DeepL glossary. Keep original and translations together.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Mocked API tests: segment in Hindi → English + Hindi (grammar-improved)</li>
+        <li>Real manual check: Zoom English → Hindi translation under 1.5s</li>
+        <li>Glossary: 5 domain terms translate identically across 3 sessions</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.2 (streaming STT)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.5 Subtitles window</h3>
+      <p><strong>Owns:</strong> <code>src/call/Subtitles.tsx</code>, overlay positioning, real-time updates, tests</p>
+      <p><strong>Goal:</strong> Display live subtitles in a second window (kept separate from the pill overlay). Show user channel on top, others below, with language labels. Update on partial and final events.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Readable live subtitles during a test call</li>
+        <li>User speaks → "Hello [partial]" appears top; other speaks → "नमस्ते [partial]" appears below</li>
+        <li>Final text locks in and next segment starts below</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.2 (streaming STT)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.6 Glossary (optional, bilingual terms)</h3>
+      <p><strong>Owns:</strong> <code>src/call/GlossaryEditor.tsx</code>, DeepL API, settings panel, tests</p>
+      <p><strong>Goal:</strong> User can set 5–10 domain terms (e.g., "DeepAI Voice" → "डीपएआई वॉयस") that persist across sessions and are used in translations.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Settings panel: add/remove glossary terms</li>
+        <li>Test: same term translated identically across 3 calls</li>
+        <li>Manual: "DeepakKewalramani" always translates the same way</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.4 (translation), 2.8 (settings shell)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.7 Suggested replies from conversation</h3>
+      <p><strong>Owns:</strong> <code>src-tauri/src/translate/suggest_replies.rs</code>, transcript context, tests</p>
+      <p><strong>Goal:</strong> After each final segment, generate 2–3 suggested replies using Claude Haiku, drawing from the whole conversation in both languages. Show on the overlay or subtitles panel.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Mocked tests: Hindi question → "नहीं सुना" / "आप दोबारा कहेंगे" / "Yes, understood"</li>
+        <li>Real manual check: sensible replies that match the context</li>
+        <li>Nothing sent automatically</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.4 (translation)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.8 Reply: typed or spoken, translated to match the call</h3>
+      <p><strong>Owns:</strong> <code>src/call/Reply.tsx</code>, text input, voice input, translation, tests</p>
+      <p><strong>Goal:</strong> User types or speaks a reply (either language), translate it to the call's language(s), show the result.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>User speaks Hindi → "आपका नाम क्या है?" → translates to English, "What is your name?"</li>
+        <li>Manual check: bilingual reply works both ways</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.4 (translation), 2.11 (streaming STT)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.9 Send: paste translated reply to chat</h3>
+      <p><strong>Owns:</strong> <code>src-tauri/src/paste/</code> extension, focus check on chat box, tests</p>
+      <p><strong>Goal:</strong> After translation, user clicks "Send" → reply is pasted into the Zoom/Meet chat box at the caret, in the caller's language.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Reply lands in Zoom chat, Slack, Teams, Discord</li>
+        <li>Secure-field guard blocks sending into passwords</li>
+        <li>Manual check: bilingual chat works end-to-end</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.8 (reply), 2.4 (paste typing)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.10 TTS (Text-to-Speech) adapter + ElevenLabs default</h3>
+      <p><strong>Owns:</strong> <code>src-tauri/src/tts/</code> provider trait, ElevenLabs adapter, tests</p>
+      <p><strong>Goal:</strong> TTS provider abstraction (like STT/LLM). Wire ElevenLabs Flash v2.5 as default. Play the audio locally in the target language.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Trait tests: fake provider returns audio</li>
+        <li>ElevenLabs tests: mocked API calls with key injection</li>
+        <li>Real manual check: reply played in Hindi/English</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 2.1 (api key injection)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.11 Virtual mic (BlackHole for prototype)</h3>
+      <p><strong>Owns:</strong> <code>docs/INSTALLED.md</code> (setup), proto notes, tests</p>
+      <p><strong>Goal:</strong> User installs BlackHole 2ch (free, GPL-3, user-installed). App routes its TTS output to the virtual mic so the other caller hears the reply in their language.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>INSTALLED.md: step-by-step for BlackHole install (prototype)</li>
+        <li>Manual check: Zoom test call → other side hears reply in their language</li>
+        <li>Caveat: user's real mic NOT muted (spec rule 8)</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.10 (TTS), 3.1 (system audio mute state)</div>
+    </div>
+
+    <div class="slice-card">
+      <h3>3.12 Phase demo check</h3>
+      <p><strong>Owns:</strong> Demo script, test call recording, manual verification</p>
+      <p><strong>Goal:</strong> Full 3-minute end-to-end: Zoom call, English + Hindi, system audio capture, streaming subtitles, translated reply, pasted to chat, heard via BlackHole. Repeat twice on the real app.</p>
+      <p><strong>Done looks like:</strong></p>
+      <ul>
+        <li>Record two full demos</li>
+        <li>All steps audited: no crashes, no pasted garbage, latency under 1.5s per segment</li>
+      </ul>
+      <div class="depends"><strong>Depends on:</strong> 3.9 (send), 3.11 (virtual mic)</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Key decisions still open</h2>
+    <table>
+      <tr>
+        <th>Question</th>
+        <th>Options</th>
+        <th>Blocks</th>
+      </tr>
+      <tr>
+        <td>Default call languages?</td>
+        <td>A: English (both channels). B: English + user's system language. C: Auto-detect both.</td>
+        <td>3.2, 3.4</td>
+      </tr>
+      <tr>
+        <td>Store call audio for later?</td>
+        <td>A: Text only. B: Audio + text (large storage). C: Audio on request per call.</td>
+        <td>Recording consent (3.3)</td>
+      </tr>
+      <tr>
+        <td>Suggested replies via Claude or local?</td>
+        <td>A: Claude Haiku (1.5s, cost). B: Template bank (no LLM). C: Offline LLM (complex).</td>
+        <td>3.7</td>
+      </tr>
+      <tr>
+        <td>Virtual mic for prototype or own driver?</td>
+        <td>A: BlackHole (user install). B: Own notarized driver (Q24, Apple Dev account).</td>
+        <td>3.11</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Risks and rollback</h2>
+    <ul>
+      <li><strong>System audio tap:</strong> ScreenCaptureKit is new (macOS 14+); older Macs need CoreAudio tap (complex). Fallback: local audio only, skip system tap.</li>
+      <li><strong>Call app detection:</strong> Zoom, Meet, Teams all route audio differently. Manual testing on each needed; failures are app-specific, not platform.</li>
+      <li><strong>Translation latency:</strong> Each segment waits for Haiku (~1.5s). If unacceptable, pre-gen suggestions or template bank instead.</li>
+      <li><strong>Rollback:</strong> Revert to Phase 2 main; no data migration needed (new features only).</li>
+    </ul>
+  </div>
+</body>
+</html>

@@ -20,10 +20,10 @@ html.overlay-view #root {
 }
 
 .ov {
-  --ov-body: #0e0f12;
-  --ov-rim: rgba(255, 255, 255, 0.08);
-  --ov-idle-body: rgba(40, 42, 48, 0.55);
-  --ov-idle-rim: rgba(255, 255, 255, 0.26);
+  --ov-body: #000000;
+  --ov-rim: rgba(255, 255, 255, 0.12);
+  --ov-idle-body: rgba(0, 0, 0, 0.85);
+  --ov-idle-rim: rgba(255, 255, 255, 0.18);
   --ov-glass-top: rgba(46, 48, 56, 0.9);
   --ov-glass-bottom: rgba(16, 17, 21, 0.92);
   --ov-glass-rim: rgba(255, 255, 255, 0.14);

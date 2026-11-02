@@ -42,6 +42,8 @@ First demo target: Dictation (full) + Live translator preview (USER-PROVIDED, 31
 | 2.8 | Settings UI: providers, keys, languages, prompts, shortcuts; usage estimate; privacy notices | UI test + manual check, keys masked |
 | 2.9 | Onboarding (permissions, Globe key setting, model download) + .dmg build | Fresh macOS user: install, onboard, dictate |
 | 2.10 | Phase demo check | 10 dictations in 4 apps, timings recorded |
+| 2.13 | Provider hub: catalog of best providers per capability (STT, LLM, TTS), one-tap connect with masked key entry, connected status | Add a provider from the catalog in Settings; key never in settings.json; entry appears in the chain editor |
+| 2.14 | BYOK custom provider "Make Your Own": endpoint URL, API key, model, protocol (OpenAI-compatible default); Test Connection | Custom endpoint answers a test ping; provider is usable like any built-in |
 
 ## Phase 3: Call audio + Live translator (branch `phase-3-translator`), DEMO PART 2
 | Slice | What | Check |

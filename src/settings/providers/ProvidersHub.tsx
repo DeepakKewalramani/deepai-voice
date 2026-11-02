@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import "./providers.css";
 import type { Provider } from "../types";
+import { LockIcon, LogoMark } from "../../ui/icons";
 import {
   CAPABILITY_LABEL,
   CardModel,
@@ -75,27 +76,57 @@ export const ProviderCard: React.FC<CardProps> = ({
       {action === "connect" || action === "manage" ? "Get a key" : "Docs"}
     </button>
   ) : null;
+  const status =
+    card.status.tone === "ok"
+      ? "connected"
+      : card.status.tone === "builtin"
+        ? "builtin"
+        : card.status.tone === "warn"
+          ? "candidate"
+          : "idle";
   return (
-    <article className="settings-card hub-card" aria-labelledby={nameId}>
+    <article
+      className="settings-card hub-card"
+      data-status={status}
+      aria-labelledby={nameId}
+    >
       <div className="hub-card-head">
-        <div className="hub-card-title">
-          <strong id={nameId}>{e.name}</strong>
-          <span className="settings-hint">{e.vendor}</span>
+        <div className="hub-card-titlewrap">
+          <span className="hub-brand" aria-hidden="true">
+            {e.status === "builtin" ? <LogoMark /> : e.name.charAt(0)}
+          </span>
+          <div className="hub-card-title">
+            <strong id={nameId}>{e.name}</strong>
+            <span className="settings-hint">{e.vendor}</span>
+          </div>
         </div>
         <StatusPill chip={card.status} />
       </div>
       <ul className="hub-chips" aria-label="Details">
         <li className="hub-chip" data-on={e.hindi === "yes"}>
+          {e.hindi === "yes" && (
+            <span className="hub-chip-led" aria-hidden="true" />
+          )}
           {hindiLabel(e.hindi)}
         </li>
-        <li className="hub-chip">{streamingLabel(e.streaming)}</li>
+        <li
+          className="hub-chip"
+          data-kind="streaming"
+          data-on={e.streaming === "yes"}
+        >
+          {e.streaming === "yes" && (
+            <span className="hub-chip-led" aria-hidden="true" />
+          )}
+          {streamingLabel(e.streaming)}
+        </li>
         <li className="hub-chip hub-chip-price">{e.price}</li>
       </ul>
       <p className="settings-hint hub-note">
         {e.languages}. {e.note}
       </p>
       {card.keyTail !== null && action === "manage" && (
-        <p className="settings-hint">
+        <p className="settings-hint hub-keyline">
+          <LockIcon />
           Key <span className="hub-mask">{maskTail(card.keyTail)}</span>
         </p>
       )}
@@ -264,8 +295,11 @@ export const CustomProviderForm: React.FC<CustomFormProps> = ({
         onSubmit();
       }}
     >
-      <div className="hub-card-head">
-        <div className="hub-card-title">
+      <div className="hub-form-head">
+        <span className="hub-form-mark" aria-hidden="true">
+          +
+        </span>
+        <div className="hub-form-title">
           <strong id="hub-custom-title">
             {editing ? `Edit ${form.name || "provider"}` : "Make your own"}
           </strong>
@@ -476,7 +510,17 @@ export const CustomList: React.FC<CustomListProps> = ({
   onRemove,
 }) => {
   if (items.length === 0)
-    return <p className="settings-hint">You have not added your own yet.</p>;
+    return (
+      <div className="hub-empty">
+        <span className="hub-empty-mark" aria-hidden="true">
+          +
+        </span>
+        <p className="settings-hint">You have not added your own yet.</p>
+        <p className="settings-hint">
+          Point any OpenAI-compatible endpoint at DeepAI Voice.
+        </p>
+      </div>
+    );
   return (
     <ul className="hub-list" aria-label="Your providers">
       {items.map((p) => {
@@ -605,11 +649,19 @@ export const ProvidersHubView: React.FC<ProvidersHubViewProps> = (p) => (
       <section
         key={s.capability}
         className="hub-section"
+        data-cap={s.capability}
         aria-labelledby={`hub-sec-${s.capability}`}
       >
-        <h4 className="hub-section-title" id={`hub-sec-${s.capability}`}>
-          {s.title}
-        </h4>
+        <div className="hub-section-head">
+          <h4 className="hub-section-title" id={`hub-sec-${s.capability}`}>
+            {s.title}
+          </h4>
+          {s.cards.length > 0 && (
+            <span className="hub-count">
+              {s.cards.length} provider{s.cards.length !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
         {s.cards.length === 0 ? (
           <p className="settings-hint">Available in the app.</p>
         ) : (
