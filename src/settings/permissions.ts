@@ -86,7 +86,10 @@ export function buildRows(status: PermissionsStatus): PermissionRow[] {
     rows.push({
       kind: SPEECH_KIND,
       ...copy[SPEECH_KIND],
-      pill: pillFor(speech),
+      pill:
+        speech === "granted"
+          ? pillFor("granted")
+          : { label: "Optional", tone: "unknown" },
       showRequest: speech !== "granted" && status.speechCanRequest === true,
     });
   }

@@ -21,15 +21,15 @@ html.overlay-view #root {
 
 .ov {
   --ov-body: #000000;
-  --ov-rim: rgba(255, 255, 255, 0.12);
-  --ov-idle-body: rgba(0, 0, 0, 0.85);
-  --ov-idle-rim: rgba(255, 255, 255, 0.18);
-  --ov-glass-top: rgba(46, 48, 56, 0.9);
-  --ov-glass-bottom: rgba(16, 17, 21, 0.92);
-  --ov-glass-rim: rgba(255, 255, 255, 0.14);
-  --ov-btn: rgba(255, 255, 255, 0.07);
-  --ov-btn-rim: rgba(255, 255, 255, 0.1);
-  --ov-glyph: #ededf2;
+  --ov-rim: rgba(255, 255, 255, 0.22);
+  --ov-idle-body: #000000;
+  --ov-idle-rim: rgba(255, 255, 255, 0.28);
+  --ov-glass-top: rgba(20, 20, 24, 0.98);
+  --ov-glass-bottom: rgba(5, 5, 8, 0.99);
+  --ov-glass-rim: rgba(255, 255, 255, 0.22);
+  --ov-btn: rgba(255, 255, 255, 0.12);
+  --ov-btn-rim: rgba(255, 255, 255, 0.2);
+  --ov-glyph: #ffffff;
   --ov-orange: #ff8a4c;
   --ov-violet: #b86bff;
   --ov-red: #ff6b66;
@@ -75,8 +75,11 @@ html.overlay-view #root {
   background: var(--ov-body);
   border: 1px solid var(--ov-rim);
   box-shadow:
-    0 6px 16px -6px rgba(0, 0, 0, 0.55),
-    0 1px 3px rgba(0, 0, 0, 0.3);
+    0 6px 18px -4px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   overflow: hidden;
   animation: ov-enter 420ms var(--ov-spring) both;
   transition:
@@ -89,11 +92,14 @@ html.overlay-view #root {
     border-color 240ms ease;
 }
 
-/* Idle: tiny, thin and half see-through, so it is easy to ignore. */
+/* Idle: deep obsidian black with clean rim and shadow so it is clearly visible */
 .ov[data-mode="idle"]:not([data-hover]) .ov-pill {
   background: var(--ov-idle-body);
   border-color: var(--ov-idle-rim);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 /* ---- Hover controls ------------------------------------------------------ */
@@ -102,14 +108,14 @@ html.overlay-view #root {
 .ov[data-hover] .ov-pill {
   background: linear-gradient(
     180deg,
-    var(--ov-glass-top),
-    var(--ov-glass-bottom)
+    rgba(22, 24, 30, 0.98),
+    rgba(8, 9, 12, 0.99)
   );
-  border-color: var(--ov-glass-rim);
+  border-color: rgba(255, 255, 255, 0.28);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 10px 24px -8px rgba(0, 0, 0, 0.65),
-    0 2px 5px rgba(0, 0, 0, 0.3);
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    0 12px 28px -6px rgba(0, 0, 0, 0.75),
+    0 2px 6px rgba(0, 0, 0, 0.4);
   transition-duration: 180ms, 180ms, 200ms, 180ms, 180ms, 180ms, 180ms;
 }
 
@@ -144,8 +150,12 @@ html.overlay-view #root {
   border: 1px solid var(--ov-btn-rim);
   background: var(--ov-btn);
   color: var(--ov-glyph);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   pointer-events: none;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease;
 }
 .ov-glyph {
   display: block;
@@ -240,19 +250,21 @@ html.overlay-view #root {
 .ov-line {
   fill: none;
   stroke: url(#ov-sine-grad);
-  stroke-width: 1.5;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(255, 138, 76, 0.4))
+    drop-shadow(0 0 8px rgba(184, 107, 255, 0.3));
 }
 
-/* Thinking: the wave settles into a flat line with a slow shimmer. */
+/* Thinking: fluid calm wave with glowing pulse continuing from speech */
 .ov[data-mode="thinking"] .ov-line {
-  animation: ov-shimmer 1.6s ease-in-out infinite;
+  animation: ov-shimmer 1.4s ease-in-out infinite;
 }
 @keyframes ov-shimmer {
   0%,
   100% {
-    opacity: 0.45;
+    opacity: 0.6;
   }
   50% {
     opacity: 1;

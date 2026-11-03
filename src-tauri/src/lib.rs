@@ -52,6 +52,8 @@ pub fn tray_action(id: &str) -> TrayAction {
     }
 }
 
+static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Shows and focuses the hidden main window.
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -174,7 +176,10 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match tray_action(event.id().as_ref()) {
                     TrayAction::ShowSettings => show_main_window(app),
-                    TrayAction::Quit => app.exit(0),
+                    TrayAction::Quit => {
+                        EXITING.store(true, std::sync::atomic::Ordering::Release);
+                        app.exit(0);
+                    }
                     TrayAction::MoveOverlay(p) => overlay::apply_position(app, p),
                     TrayAction::Ignore => {}
                 })
@@ -190,8 +195,10 @@ pub fn run() {
             // Clicking the app again (Finder, Spotlight) brings the window back.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => show_main_window(app),
-            // Keep running in the menu bar after the last window is closed.
-            tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
+            // Keep running in the menu bar unless user explicitly selected Quit.
+            tauri::RunEvent::ExitRequested { api, .. }
+                if !EXITING.load(std::sync::atomic::Ordering::Acquire) =>
+            {
                 api.prevent_exit();
             }
             _ => {}

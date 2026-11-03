@@ -113,15 +113,15 @@ const ALL_SIZES = [...Object.values(CAPSULE_SIZES), HOVER_SIZE];
 
 describe("capsule sizes", () => {
   it("is a tiny thin capsule when idle and a small one in error", () => {
-    expect(capsuleSize("idle")).toEqual({ width: 36, height: 8 });
-    expect(capsuleSize("error")).toEqual({ width: 48, height: 14 });
+    expect(capsuleSize("idle")).toEqual({ width: 64, height: 16 });
+    expect(capsuleSize("error")).toEqual({ width: 72, height: 20 });
     // Error stays small: no bigger than the compact listening capsule.
     expect(capsuleSize("error").width).toBeLessThan(
       capsuleSize("listening").width,
     );
   });
   it("grows to hold the wave while listening or thinking", () => {
-    expect(capsuleSize("listening")).toEqual({ width: 72, height: 20 });
+    expect(capsuleSize("listening")).toEqual({ width: 92, height: 26 });
     expect(capsuleSize("thinking")).toEqual(capsuleSize("listening"));
   });
   it("opens into the control capsule with two round buttons", () => {

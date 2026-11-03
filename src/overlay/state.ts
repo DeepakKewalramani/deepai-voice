@@ -57,10 +57,10 @@ export const CAPSULE_SIZES: Record<
   OverlayMode,
   { width: number; height: number }
 > = {
-  idle: { width: 50, height: 10 },
-  error: { width: 60, height: 16 },
-  thinking: { width: 88, height: 22 },
-  listening: { width: 88, height: 22 },
+  idle: { width: 64, height: 16 },
+  error: { width: 72, height: 20 },
+  thinking: { width: 92, height: 26 },
+  listening: { width: 92, height: 26 },
 };
 
 /** The control capsule shown while the cursor is over the pill, unrotated
@@ -123,7 +123,7 @@ export function waveAmplitude(
       if (level !== null) return WAVE_AMP_MAX * (0.25 + 0.75 * clamp01(level));
       return WAVE_AMP_MAX * (0.6 + 0.4 * Math.sin(t / 420));
     case "thinking":
-      return 0.9 + 0.3 * Math.sin(t / 300);
+      return 1.4 + 0.4 * Math.sin(t / 300);
     default:
       return 0;
   }

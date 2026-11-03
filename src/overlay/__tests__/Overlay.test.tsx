@@ -23,9 +23,9 @@ describe("Overlay", () => {
     expect(m).toContain('data-mode="idle"');
     expect(m).toContain('data-pos="top"');
     expect(m).toContain('aria-label="DeepAI Voice ready"');
-    // 2.3c: tiny and thin.
-    expect(m).toContain("--w:36px");
-    expect(m).toContain("--h:8px");
+    // Increased dimensions for visibility
+    expect(m).toContain("--w:64px");
+    expect(m).toContain("--h:16px");
     // Nothing inside: no wave, no orb, no dots, no buttons.
     expect(m).not.toContain("<svg");
     expect(m).not.toContain("ov-orb");
@@ -37,8 +37,8 @@ describe("Overlay", () => {
     const m = render("REC");
     expect(m).toContain('data-mode="listening"');
     expect(m).toContain('aria-label="Listening"');
-    expect(m).toContain("--w:72px");
-    expect(m).toContain("--h:20px");
+    expect(m).toContain("--w:92px");
+    expect(m).toContain("--h:26px");
     expect(m.match(/<path/g)?.length).toBe(1);
     expect(m).toContain("linearGradient");
     expect(m).toContain("#ff8a4c");
@@ -60,13 +60,13 @@ describe("Overlay", () => {
       />,
     );
     expect(m).not.toContain("hello there");
-    expect(m).toContain("--w:72px");
+    expect(m).toContain("--w:92px");
   });
   it("shows an error as a small red line with no text", () => {
     const m = render("Model missing", "left");
     expect(m).toContain('data-mode="error"');
     expect(m).toContain('data-pos="left"');
-    expect(m).toContain("--w:48px");
+    expect(m).toContain("--w:72px");
     expect(m.match(/<path/g)?.length).toBe(1);
     expect(visibleText(m)).toBe("");
     // The message stays available to assistive tech only.
@@ -78,7 +78,7 @@ describe("Overlay", () => {
       expect(m).toContain(`data-pos="${pos}"`);
       expect(m).toContain('data-orient="vertical"');
       // Same unrotated size and one wave: CSS turns the whole capsule.
-      expect(m).toContain("--w:72px");
+      expect(m).toContain("--w:92px");
       expect(m.match(/<path/g)?.length).toBe(1);
     }
     for (const pos of ["top", "bottom"] as const) {

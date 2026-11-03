@@ -640,9 +640,6 @@ fn run_click<R: Runtime>(app: &AppHandle<R>, button: OverlayButton) {
 
 /// Polls the cursor and tells the overlay when the controls open or close.
 fn hover_tick<R: Runtime>(app: &AppHandle<R>, started: Instant) {
-    if !TAP_READY.load(Ordering::Acquire) {
-        return;
-    }
     let Some(cursor) = cursor_location() else {
         return;
     };

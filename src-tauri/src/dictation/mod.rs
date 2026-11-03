@@ -445,8 +445,12 @@ struct EnginePicker {
 }
 
 impl EnginePicker {
-    fn new() -> Self {
-        let value = std::env::var(engine::ENGINE_ENV).ok();
+    fn new(config_dir: Option<&Path>) -> Self {
+        let value = std::env::var(engine::ENGINE_ENV).ok().or_else(|| {
+            config_dir
+                .map(|d| d.join("engine.txt"))
+                .and_then(|p| std::fs::read_to_string(p).ok())
+        });
         #[cfg(target_os = "macos")]
         let engine: Option<Arc<dyn StreamingStt>> =
             Some(Arc::new(crate::stt::apple_speech::AppleSpeech::new()));
@@ -521,7 +525,7 @@ fn recorder_thread(
     let mut last_error: Option<String> = None;
     // Streaming engine of a released hold whose final is still on the way.
     let mut finishing: Option<StreamHold> = None;
-    let mut picker = EnginePicker::new();
+    let mut picker = EnginePicker::new(dictionary_dir.as_deref());
     // Noise floor learned in earlier holds, so a noisy room is known at once.
     let mut noise_floor = live::MIN_FLOOR;
     loop {
