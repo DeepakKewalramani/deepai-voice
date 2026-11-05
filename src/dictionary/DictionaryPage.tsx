@@ -241,7 +241,7 @@ const AddCard: React.FC<{
               rows={5}
               value={text}
               spellCheck={false}
-              placeholder={"Deepak\nTequity\nKubernetes"}
+              placeholder={"Deepak\nMumbai\nKubernetes"}
               disabled={busy || full}
               onChange={(e) => setText(e.target.value)}
             />
